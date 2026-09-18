@@ -203,6 +203,7 @@ mod tests {
             cwd: "/home/user/project".to_owned(),
             started_at: 1700000000,
             status: None,
+            spare: false,
         }];
 
         let history = serde_json::json!({
@@ -227,6 +228,7 @@ mod tests {
             cwd: "/home/user/project".to_owned(),
             started_at: 1700000000,
             status: None,
+            spare: false,
         }];
 
         let lines = vec![
@@ -270,6 +272,7 @@ mod tests {
             cwd: "/tmp".to_owned(),
             started_at: 0,
             status: None,
+            spare: false,
         }];
 
         let contents = r#"{"display":"hello"}
@@ -351,6 +354,7 @@ not json at all"#;
                 cwd: "/project-a".to_owned(),
                 started_at: 1700000000,
                 status: None,
+                spare: false,
             },
             ClaudeSession {
                 pid: 200,
@@ -358,6 +362,7 @@ not json at all"#;
                 cwd: "/project-b".to_owned(),
                 started_at: 1700000000,
                 status: None,
+                spare: false,
             },
         ];
 
@@ -396,6 +401,7 @@ not json at all"#;
             cwd: "/project".to_owned(),
             started_at: 1700000000,
             status: None,
+            spare: false,
         }];
 
         let lines = vec![
@@ -463,6 +469,7 @@ not json at all"#;
                 cwd: "/project".to_owned(),
                 started_at: 1700000000,
                 status: None,
+                spare: false,
             },
             ClaudeSession {
                 pid: 200,
@@ -470,6 +477,7 @@ not json at all"#;
                 cwd: "/project".to_owned(),
                 started_at: 1700000000,
                 status: None,
+                spare: false,
             },
         ];
 

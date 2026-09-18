@@ -12,6 +12,8 @@ pub struct ClaudeSession {
     pub started_at: u64,
     #[serde(default)]
     pub status: Option<String>,
+    #[serde(default)]
+    pub spare: bool,
 }
 
 pub enum SessionState {
@@ -75,6 +77,10 @@ pub fn discover_sessions_in(
         let Ok(session) = serde_json::from_str::<ClaudeSession>(&contents) else {
             continue;
         };
+
+        if session.spare {
+            continue;
+        }
 
         if check_alive && !tree.is_alive(session.pid) {
             continue;
@@ -379,6 +385,23 @@ mod tests {
     }
 
     #[test]
+    fn discover_sessions_skips_spare_sessions() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let json = serde_json::json!({
+            "pid": 99999,
+            "sessionId": "spare-1",
+            "cwd": "/home/user/project",
+            "startedAt": 1700000000_u64,
+            "status": "idle",
+            "spare": true
+        });
+        std::fs::write(dir.path().join("spare.json"), json.to_string()).expect("write");
+        let tree = ProcessTree::build();
+        let sessions = discover_sessions_in(dir.path(), false, &tree);
+        assert!(sessions.is_empty());
+    }
+
+    #[test]
     fn discover_sessions_reads_status_field() {
         let dir = tempfile::tempdir().expect("tempdir");
         let json = serde_json::json!({
@@ -547,6 +570,7 @@ mod tests {
             cwd: cwd.to_owned(),
             started_at: 0,
             status: status.map(str::to_owned),
+            spare: false,
         }
     }
 
@@ -724,6 +748,7 @@ mod tests {
             cwd: "/home/user".to_owned(),
             started_at: 0,
             status: None,
+            spare: false,
         };
 
         let result = find_jsonl_path_in(&session, dir.path());
@@ -747,6 +772,7 @@ mod tests {
             cwd: "/home/user/somewhere/else".to_owned(),
             started_at: 0,
             status: None,
+            spare: false,
         };
 
         let result = find_jsonl_path_in(&session, dir.path());
@@ -762,6 +788,7 @@ mod tests {
             cwd: "/home/user".to_owned(),
             started_at: 0,
             status: None,
+            spare: false,
         };
         let result = find_jsonl_path_in(&session, dir.path());
         assert!(result.is_none());
