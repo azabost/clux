@@ -343,7 +343,9 @@ pub fn find_jsonl_path_in(session: &ClaudeSession, home: &Path) -> Option<PathBu
 }
 
 pub fn encode_cwd(cwd: &str) -> String {
-    cwd.replace('/', "-")
+    cwd.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 pub fn read_tail_chunk(path: &Path) -> Option<String> {
@@ -417,6 +419,30 @@ mod tests {
     #[test]
     fn encode_cwd_trailing_slash() {
         assert_eq!(encode_cwd("/home/user/"), "-home-user-");
+    }
+
+    #[test]
+    fn encode_cwd_dotted_path() {
+        assert_eq!(
+            encode_cwd("/home/user/.config/nvim"),
+            "-home-user--config-nvim"
+        );
+    }
+
+    #[test]
+    fn encode_cwd_worktree_with_plus() {
+        assert_eq!(
+            encode_cwd("/home/user/repo/.claude/worktrees/task+ABC-123"),
+            "-home-user-repo--claude-worktrees-task-ABC-123"
+        );
+    }
+
+    #[test]
+    fn encode_cwd_underscore_and_space() {
+        assert_eq!(
+            encode_cwd("/home/user/my_project dir"),
+            "-home-user-my-project-dir"
+        );
     }
 
     #[test]
