@@ -162,6 +162,21 @@ fn sort_entries_recent(
     });
 }
 
+fn panel_info(panel: &claude::PanelSession, tree: &process::ProcessTree) -> claude::SessionInfo {
+    let mut info = claude::detect_info(panel.displayed, tree);
+
+    if panel.displayed.pid != panel.pane_owner.pid
+        && matches!(
+            claude::detect_info(panel.pane_owner, tree).state,
+            claude::SessionState::Active
+        )
+    {
+        info.state = claude::SessionState::Active;
+    }
+
+    info
+}
+
 fn gather_list_entries(order: SortOrder) -> anyhow::Result<Vec<ListEntry>> {
     let proc_tree = process::ProcessTree::build();
     let sessions = claude::discover_sessions(&proc_tree);
@@ -169,17 +184,21 @@ fn gather_list_entries(order: SortOrder) -> anyhow::Result<Vec<ListEntry>> {
     let summaries = history::load_summaries(&sessions);
     let recaps_enabled = tmux::get_global_option("@clux-recaps")?.as_deref() != Some("off");
 
-    let with_panes: Vec<_> = sessions
+    let panels = claude::fold_parked_jobs(&sessions);
+
+    let with_panes: Vec<_> = panels
         .iter()
-        .filter_map(|sess| {
-            process::find_tmux_pane(sess.pid, &pane_map, &proc_tree).map(|pane| (sess, pane))
+        .filter_map(|panel| {
+            process::find_tmux_pane(panel.pane_owner.pid, &pane_map, &proc_tree)
+                .map(|pane| (panel, pane))
         })
         .collect();
 
     let mut entries: Vec<ListEntry> = with_panes
         .iter()
-        .map(|(session, pane)| {
-            let info = claude::detect_info(session, &proc_tree);
+        .map(|(panel, pane)| {
+            let session = panel.displayed;
+            let info = panel_info(panel, &proc_tree);
             let state_str = match info.state {
                 claude::SessionState::Active => "active",
                 claude::SessionState::Idle => "idle",
@@ -272,9 +291,9 @@ pub fn run_update(filter: &str) -> anyhow::Result<()> {
 
     let mut counts: HashMap<String, SessionCounts> = HashMap::new();
 
-    for session in &sessions {
-        if let Some(pane) = process::find_tmux_pane(session.pid, &pane_map, &proc_tree) {
-            let info = claude::detect_info(session, &proc_tree);
+    for panel in &claude::fold_parked_jobs(&sessions) {
+        if let Some(pane) = process::find_tmux_pane(panel.pane_owner.pid, &pane_map, &proc_tree) {
+            let info = panel_info(panel, &proc_tree);
             let entry = counts
                 .entry(pane.session_name.clone())
                 .or_insert(SessionCounts { active: 0, idle: 0 });

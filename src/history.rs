@@ -204,6 +204,8 @@ mod tests {
             started_at: 1700000000,
             status: None,
             spare: false,
+            job_id: None,
+            parked_job_id: None,
         }];
 
         let history = serde_json::json!({
@@ -229,6 +231,8 @@ mod tests {
             started_at: 1700000000,
             status: None,
             spare: false,
+            job_id: None,
+            parked_job_id: None,
         }];
 
         let lines = vec![
@@ -273,6 +277,8 @@ mod tests {
             started_at: 0,
             status: None,
             spare: false,
+            job_id: None,
+            parked_job_id: None,
         }];
 
         let contents = r#"{"display":"hello"}
@@ -355,6 +361,8 @@ not json at all"#;
                 started_at: 1700000000,
                 status: None,
                 spare: false,
+                job_id: None,
+                parked_job_id: None,
             },
             ClaudeSession {
                 pid: 200,
@@ -363,6 +371,8 @@ not json at all"#;
                 started_at: 1700000000,
                 status: None,
                 spare: false,
+                job_id: None,
+                parked_job_id: None,
             },
         ];
 
@@ -402,6 +412,8 @@ not json at all"#;
             started_at: 1700000000,
             status: None,
             spare: false,
+            job_id: None,
+            parked_job_id: None,
         }];
 
         let lines = vec![
@@ -470,6 +482,8 @@ not json at all"#;
                 started_at: 1700000000,
                 status: None,
                 spare: false,
+                job_id: None,
+                parked_job_id: None,
             },
             ClaudeSession {
                 pid: 200,
@@ -478,6 +492,8 @@ not json at all"#;
                 started_at: 1700000000,
                 status: None,
                 spare: false,
+                job_id: None,
+                parked_job_id: None,
             },
         ];
 

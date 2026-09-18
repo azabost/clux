@@ -1,5 +1,6 @@
 use crate::process::ProcessTree;
 use serde::Deserialize;
+use std::collections::{HashMap, HashSet};
 use std::io::{Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -14,6 +15,10 @@ pub struct ClaudeSession {
     pub status: Option<String>,
     #[serde(default)]
     pub spare: bool,
+    #[serde(default)]
+    pub job_id: Option<String>,
+    #[serde(default)]
+    pub parked_job_id: Option<String>,
 }
 
 pub enum SessionState {
@@ -90,6 +95,41 @@ pub fn discover_sessions_in(
     }
 
     sessions
+}
+
+pub struct PanelSession<'sess> {
+    pub pane_owner: &'sess ClaudeSession,
+    pub displayed: &'sess ClaudeSession,
+}
+
+pub fn fold_parked_jobs(sessions: &[ClaudeSession]) -> Vec<PanelSession<'_>> {
+    let by_job: HashMap<&str, &ClaudeSession> = sessions
+        .iter()
+        .filter_map(|session| session.job_id.as_deref().map(|id| (id, session)))
+        .collect();
+
+    let mut folded: HashSet<u32> = HashSet::new();
+    let mut panels: Vec<PanelSession<'_>> = Vec::new();
+
+    for session in sessions {
+        let parked = session
+            .parked_job_id
+            .as_deref()
+            .and_then(|id| by_job.get(id).copied())
+            .filter(|job| job.pid != session.pid && !folded.contains(&job.pid));
+
+        if let Some(job) = parked {
+            let _ = folded.insert(job.pid);
+        }
+
+        panels.push(PanelSession {
+            pane_owner: session,
+            displayed: parked.unwrap_or(session),
+        });
+    }
+
+    panels.retain(|panel| !folded.contains(&panel.pane_owner.pid));
+    panels
 }
 
 pub fn detect_info(session: &ClaudeSession, tree: &ProcessTree) -> SessionInfo {
@@ -384,6 +424,73 @@ mod tests {
         assert!(sessions.is_empty());
     }
 
+    fn make_job_session(pid: u32, session_id: &str, job_id: &str) -> ClaudeSession {
+        let mut session = make_session(session_id, "/home/user");
+        session.pid = pid;
+        session.job_id = Some(job_id.to_owned());
+        session
+    }
+
+    fn make_owner_session(pid: u32, session_id: &str, parked_job_id: &str) -> ClaudeSession {
+        let mut session = make_session(session_id, "/home/user");
+        session.pid = pid;
+        session.parked_job_id = Some(parked_job_id.to_owned());
+        session
+    }
+
+    #[test]
+    fn fold_parked_jobs_collapses_job_into_its_pane() {
+        let sessions = vec![
+            make_owner_session(1, "pane", "job-1"),
+            make_job_session(2, "parked", "job-1"),
+        ];
+
+        let panels = fold_parked_jobs(&sessions);
+
+        assert_eq!(panels.len(), 1);
+        let panel = panels.first().expect("panel");
+        assert_eq!(panel.pane_owner.pid, 1);
+        assert_eq!(panel.displayed.pid, 2);
+    }
+
+    #[test]
+    fn fold_parked_jobs_keeps_unmatched_background_session() {
+        let sessions = vec![
+            make_owner_session(1, "pane", "job-other"),
+            make_job_session(2, "loose", "job-1"),
+        ];
+
+        let panels = fold_parked_jobs(&sessions);
+
+        assert_eq!(panels.len(), 2);
+        assert!(panels.iter().all(|p| p.pane_owner.pid == p.displayed.pid));
+    }
+
+    #[test]
+    fn fold_parked_jobs_leaves_plain_sessions_alone() {
+        let sessions = vec![make_session("a", "/home/user"), make_session("b", "/tmp")];
+
+        let panels = fold_parked_jobs(&sessions);
+
+        assert_eq!(panels.len(), 2);
+        assert!(panels.iter().all(|p| p.pane_owner.pid == p.displayed.pid));
+    }
+
+    #[test]
+    fn fold_parked_jobs_gives_a_job_to_a_single_owner() {
+        let sessions = vec![
+            make_owner_session(1, "pane-a", "job-1"),
+            make_owner_session(2, "pane-b", "job-1"),
+            make_job_session(3, "parked", "job-1"),
+        ];
+
+        let panels = fold_parked_jobs(&sessions);
+
+        assert_eq!(panels.len(), 2);
+        let folded = panels.iter().filter(|p| p.displayed.pid == 3).count();
+        assert_eq!(folded, 1);
+    }
+
     #[test]
     fn discover_sessions_skips_spare_sessions() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -571,6 +678,8 @@ mod tests {
             started_at: 0,
             status: status.map(str::to_owned),
             spare: false,
+            job_id: None,
+            parked_job_id: None,
         }
     }
 
@@ -749,6 +858,8 @@ mod tests {
             started_at: 0,
             status: None,
             spare: false,
+            job_id: None,
+            parked_job_id: None,
         };
 
         let result = find_jsonl_path_in(&session, dir.path());
@@ -773,6 +884,8 @@ mod tests {
             started_at: 0,
             status: None,
             spare: false,
+            job_id: None,
+            parked_job_id: None,
         };
 
         let result = find_jsonl_path_in(&session, dir.path());
@@ -789,6 +902,8 @@ mod tests {
             started_at: 0,
             status: None,
             spare: false,
+            job_id: None,
+            parked_job_id: None,
         };
         let result = find_jsonl_path_in(&session, dir.path());
         assert!(result.is_none());
