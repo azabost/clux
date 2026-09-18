@@ -1,6 +1,73 @@
 use crate::tmux::PaneInfo;
 use std::collections::HashMap;
 
+pub struct AttachClient {
+    pub pid: u32,
+    pub id: String,
+}
+
+fn parse_attach_clients(output: &str) -> Vec<AttachClient> {
+    let mut clients = Vec::new();
+
+    for line in output.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(Ok(pid)) = fields.next().map(str::parse::<u32>) else {
+            continue;
+        };
+
+        let mut rest =
+            fields.skip_while(|token| !matches!(token.rsplit('/').next(), Some("claude")));
+
+        if rest.next().is_none() || rest.next() != Some("attach") {
+            continue;
+        }
+
+        if let Some(id) = rest.next().filter(|id| id.len() >= MIN_ATTACH_ID_LEN) {
+            clients.push(AttachClient {
+                pid,
+                id: id.to_owned(),
+            });
+        }
+    }
+
+    clients
+}
+
+const MIN_ATTACH_ID_LEN: usize = 4;
+
+#[cfg(target_os = "macos")]
+pub fn attach_clients() -> Vec<AttachClient> {
+    let Ok(output) = std::process::Command::new("ps")
+        .args(["-eo", "pid=,args="])
+        .output()
+    else {
+        return Vec::new();
+    };
+    parse_attach_clients(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(target_os = "linux")]
+pub fn attach_clients() -> Vec<AttachClient> {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+
+    let mut lines = String::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(|n| n.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Ok(raw) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
+            continue;
+        };
+        let args = String::from_utf8_lossy(&raw).replace('\0', " ");
+        lines.push_str(&format!("{pid} {args}\n"));
+    }
+
+    parse_attach_clients(&lines)
+}
+
 #[cfg(target_os = "linux")]
 pub struct ProcessTree {
     proc_available: bool,
@@ -230,6 +297,29 @@ mod tests {
         for pid in [10, 20, 11, 12, 21] {
             assert!(result.contains(&pid));
         }
+    }
+
+    #[test]
+    fn parse_attach_clients_finds_attach_process() {
+        let output = "35719 claude attach f448c44a\n  123 /bin/zsh\n";
+        let clients = parse_attach_clients(output);
+        assert_eq!(clients.len(), 1);
+        let client = clients.first().expect("client");
+        assert_eq!(client.pid, 35719);
+        assert_eq!(client.id, "f448c44a");
+    }
+
+    #[test]
+    fn parse_attach_clients_handles_absolute_path() {
+        let output = "42 /opt/homebrew/Caskroom/claude-code/2.1.267/claude attach abcd1234\n";
+        let clients = parse_attach_clients(output);
+        assert_eq!(clients.first().map(|c| c.id.as_str()), Some("abcd1234"));
+    }
+
+    #[test]
+    fn parse_attach_clients_ignores_other_subcommands() {
+        let output = "1 claude --resume 6c259df3\n2 claude daemon run\n3 claude attach ab\n";
+        assert!(parse_attach_clients(output).is_empty());
     }
 
     #[test]

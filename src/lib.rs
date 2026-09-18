@@ -162,6 +162,28 @@ fn sort_entries_recent(
     });
 }
 
+fn attach_id_matches(id: &str, session: &claude::ClaudeSession) -> bool {
+    session
+        .job_id
+        .as_deref()
+        .is_some_and(|job| job.starts_with(id))
+        || session.session_id.starts_with(id)
+}
+
+fn resolve_pane<'pane>(
+    session: &claude::ClaudeSession,
+    pane_map: &'pane HashMap<u32, tmux::PaneInfo>,
+    tree: &process::ProcessTree,
+    attached: &[process::AttachClient],
+) -> Option<&'pane tmux::PaneInfo> {
+    process::find_tmux_pane(session.pid, pane_map, tree).or_else(|| {
+        attached
+            .iter()
+            .find(|client| attach_id_matches(&client.id, session))
+            .and_then(|client| process::find_tmux_pane(client.pid, pane_map, tree))
+    })
+}
+
 fn panel_info(panel: &claude::PanelSession, tree: &process::ProcessTree) -> claude::SessionInfo {
     let mut info = claude::detect_info(panel.displayed, tree);
 
@@ -185,11 +207,12 @@ fn gather_list_entries(order: SortOrder) -> anyhow::Result<Vec<ListEntry>> {
     let recaps_enabled = tmux::get_global_option("@clux-recaps")?.as_deref() != Some("off");
 
     let panels = claude::fold_parked_jobs(&sessions);
+    let attached = process::attach_clients();
 
     let with_panes: Vec<_> = panels
         .iter()
         .filter_map(|panel| {
-            process::find_tmux_pane(panel.pane_owner.pid, &pane_map, &proc_tree)
+            resolve_pane(panel.pane_owner, &pane_map, &proc_tree, &attached)
                 .map(|pane| (panel, pane))
         })
         .collect();
@@ -291,8 +314,10 @@ pub fn run_update(filter: &str) -> anyhow::Result<()> {
 
     let mut counts: HashMap<String, SessionCounts> = HashMap::new();
 
+    let attached = process::attach_clients();
+
     for panel in &claude::fold_parked_jobs(&sessions) {
-        if let Some(pane) = process::find_tmux_pane(panel.pane_owner.pid, &pane_map, &proc_tree) {
+        if let Some(pane) = resolve_pane(panel.pane_owner, &pane_map, &proc_tree, &attached) {
             let info = panel_info(panel, &proc_tree);
             let entry = counts
                 .entry(pane.session_name.clone())
@@ -595,6 +620,37 @@ mod tests {
         let result = truncate_at("hellooo\u{1F916}world", 10);
         assert!(result.ends_with("..."));
         assert!(result.chars().count() <= 10);
+    }
+
+    fn attach_session(session_id: &str, job_id: Option<&str>) -> claude::ClaudeSession {
+        claude::ClaudeSession {
+            pid: 1,
+            session_id: session_id.to_owned(),
+            cwd: "/home/user".to_owned(),
+            started_at: 0,
+            status: None,
+            spare: false,
+            job_id: job_id.map(str::to_owned),
+            parked_job_id: None,
+        }
+    }
+
+    #[test]
+    fn attach_id_matches_job_id_prefix() {
+        let session = attach_session("f448c44a-ec32-4f86-a97b-f53461f94861", Some("f448c44a"));
+        assert!(attach_id_matches("f448c44a", &session));
+    }
+
+    #[test]
+    fn attach_id_matches_session_id_prefix() {
+        let session = attach_session("f448c44a-ec32-4f86-a97b-f53461f94861", None);
+        assert!(attach_id_matches("f448c44a-ec32", &session));
+    }
+
+    #[test]
+    fn attach_id_rejects_other_session() {
+        let session = attach_session("6c259df3-16dc-46b2-91ea-7e2f84e5506e", Some("6c259df3"));
+        assert!(!attach_id_matches("f448c44a", &session));
     }
 
     fn make_entry(state: &'static str, mode: &'static str, timestamp: u64) -> ListEntry {
