@@ -114,7 +114,7 @@ pub fn detect_info_in(session: &ClaudeSession, home: &Path, tree: &ProcessTree) 
     let mut final_state = state;
 
     if matches!(final_state, SessionState::Idle)
-        && is_jsonl_stale(session, &jsonl_path)
+        && is_jsonl_stale(&jsonl_path)
         && tree.has_children(session.pid)
     {
         final_state = SessionState::Active;
@@ -216,7 +216,7 @@ pub fn parse_jsonl_tail(tail: &str) -> (SessionState, SessionMode) {
     )
 }
 
-fn is_jsonl_stale(session: &ClaudeSession, jsonl_path: &Path) -> bool {
+fn is_jsonl_stale(jsonl_path: &Path) -> bool {
     let Some(jsonl_mtime) = jsonl_path.metadata().ok().and_then(|m| m.modified().ok()) else {
         return false;
     };
@@ -230,13 +230,11 @@ fn is_jsonl_stale(session: &ClaudeSession, jsonl_path: &Path) -> bool {
         return false;
     }
 
-    let Some(home) = home_dir() else {
+    let Some(project_dir) = jsonl_path.parent() else {
         return false;
     };
-    let encoded_cwd = encode_cwd(&session.cwd);
-    let project_dir = home.join(".claude").join("projects").join(&encoded_cwd);
 
-    let Ok(entries) = std::fs::read_dir(&project_dir) else {
+    let Ok(entries) = std::fs::read_dir(project_dir) else {
         return false;
     };
 
@@ -336,10 +334,23 @@ fn collect_open_files(parent_pid: u32, tree: &ProcessTree) -> std::collections::
 }
 
 pub fn find_jsonl_path_in(session: &ClaudeSession, home: &Path) -> Option<PathBuf> {
-    let encoded_cwd = encode_cwd(&session.cwd);
-    let project_dir = home.join(".claude").join("projects").join(&encoded_cwd);
-    let jsonl = project_dir.join(format!("{}.jsonl", session.session_id));
-    jsonl.exists().then_some(jsonl)
+    let projects_dir = home.join(".claude").join("projects");
+    let file_name = format!("{}.jsonl", session.session_id);
+
+    let by_cwd = projects_dir.join(encode_cwd(&session.cwd)).join(&file_name);
+    if by_cwd.exists() {
+        return Some(by_cwd);
+    }
+
+    find_jsonl_by_session_id(&projects_dir, &file_name)
+}
+
+fn find_jsonl_by_session_id(projects_dir: &Path, file_name: &str) -> Option<PathBuf> {
+    std::fs::read_dir(projects_dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path().join(file_name))
+        .find(|candidate| candidate.is_file())
 }
 
 pub fn encode_cwd(cwd: &str) -> String {
@@ -796,6 +807,28 @@ mod tests {
 
         let result = find_jsonl_path_in(&session, dir.path());
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn find_jsonl_path_falls_back_to_session_id_after_cwd_change() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project_dir = dir
+            .path()
+            .join(".claude")
+            .join("projects")
+            .join("-home-user-where-the-session-started");
+        std::fs::create_dir_all(&project_dir).expect("create project dir");
+        std::fs::write(project_dir.join("sess-moved.jsonl"), "").expect("write");
+
+        let session = ClaudeSession {
+            pid: 1,
+            session_id: "sess-moved".to_owned(),
+            cwd: "/home/user/somewhere/else".to_owned(),
+            started_at: 0,
+        };
+
+        let result = find_jsonl_path_in(&session, dir.path());
+        assert_eq!(result, Some(project_dir.join("sess-moved.jsonl")));
     }
 
     #[test]
