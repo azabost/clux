@@ -10,11 +10,22 @@ pub struct ClaudeSession {
     pub session_id: String,
     pub cwd: String,
     pub started_at: u64,
+    #[serde(default)]
+    pub status: Option<String>,
 }
 
 pub enum SessionState {
     Active,
     Idle,
+}
+
+impl SessionState {
+    fn from_status(status: Option<&str>) -> Self {
+        match status {
+            Some("idle") => Self::Idle,
+            _ => Self::Active,
+        }
+    }
 }
 
 pub enum SessionMode {
@@ -78,7 +89,7 @@ pub fn discover_sessions_in(
 pub fn detect_info(session: &ClaudeSession, tree: &ProcessTree) -> SessionInfo {
     let Some(home) = home_dir() else {
         return SessionInfo {
-            state: SessionState::Active,
+            state: SessionState::from_status(session.status.as_deref()),
             mode: SessionMode::Default,
             active_tasks: 0,
             active_agents: 0,
@@ -89,39 +100,16 @@ pub fn detect_info(session: &ClaudeSession, tree: &ProcessTree) -> SessionInfo {
 }
 
 pub fn detect_info_in(session: &ClaudeSession, home: &Path, tree: &ProcessTree) -> SessionInfo {
-    let default = SessionInfo {
-        state: SessionState::Active,
-        mode: SessionMode::Default,
-        active_tasks: 0,
-        active_agents: 0,
-        recap: None,
-    };
-
-    let Some(jsonl_path) = find_jsonl_path_in(session, home) else {
-        return default;
-    };
-
-    let Some(tail) = read_tail_chunk(&jsonl_path) else {
-        return default;
-    };
-
-    let (state, mode) = parse_jsonl_tail(&tail);
-
-    let recap = parse_recap(&tail);
-
+    let tail = find_jsonl_path_in(session, home).and_then(|path| read_tail_chunk(&path));
+    let (mode, recap) = tail
+        .as_deref()
+        .map_or((SessionMode::Default, None), |contents| {
+            (parse_permission_mode(contents), parse_recap(contents))
+        });
     let (tasks, agents) = count_active_background(session, tree);
 
-    let mut final_state = state;
-
-    if matches!(final_state, SessionState::Idle)
-        && is_jsonl_stale(&jsonl_path)
-        && tree.has_children(session.pid)
-    {
-        final_state = SessionState::Active;
-    }
-
     SessionInfo {
-        state: final_state,
+        state: SessionState::from_status(session.status.as_deref()),
         mode,
         active_tasks: tasks,
         active_agents: agents,
@@ -161,97 +149,23 @@ fn strip_recap_hint(content: &str) -> String {
         .to_owned()
 }
 
-pub fn parse_jsonl_tail(tail: &str) -> (SessionState, SessionMode) {
-    let mut state = None;
-    let mut mode = None;
-
+pub fn parse_permission_mode(tail: &str) -> SessionMode {
     for line in tail.lines().rev() {
         let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
 
-        if mode.is_none()
-            && let Some(pm) = entry.get("permissionMode").and_then(|m| m.as_str())
-        {
-            mode = Some(match pm {
+        if let Some(permission_mode) = entry.get("permissionMode").and_then(|m| m.as_str()) {
+            return match permission_mode {
                 "plan" => SessionMode::Plan,
                 "bypassPermissions" => SessionMode::BypassPermissions,
                 "acceptEdits" => SessionMode::AcceptEdits,
                 _ => SessionMode::Default,
-            });
-        }
-
-        if state.is_none() {
-            let entry_type = entry.get("type").and_then(|t| t.as_str());
-            if entry_type == Some("user") || entry_type == Some("assistant") {
-                let role = entry
-                    .get("message")
-                    .and_then(|m| m.get("role"))
-                    .and_then(|r| r.as_str());
-
-                if role == Some("user") {
-                    state = Some(SessionState::Active);
-                } else {
-                    let stop_reason = entry
-                        .get("message")
-                        .and_then(|m| m.get("stop_reason"))
-                        .and_then(|s| s.as_str());
-
-                    state = Some(match stop_reason {
-                        Some("end_turn") => SessionState::Idle,
-                        _ => SessionState::Active,
-                    });
-                }
-            }
-        }
-
-        if state.is_some() && mode.is_some() {
-            break;
+            };
         }
     }
 
-    (
-        state.unwrap_or(SessionState::Active),
-        mode.unwrap_or(SessionMode::Default),
-    )
-}
-
-fn is_jsonl_stale(jsonl_path: &Path) -> bool {
-    let Some(jsonl_mtime) = jsonl_path.metadata().ok().and_then(|m| m.modified().ok()) else {
-        return false;
-    };
-
-    let age = std::time::SystemTime::now()
-        .duration_since(jsonl_mtime)
-        .ok()
-        .map_or(0, |d| d.as_secs());
-
-    if age < 60 {
-        return false;
-    }
-
-    let Some(project_dir) = jsonl_path.parent() else {
-        return false;
-    };
-
-    let Ok(entries) = std::fs::read_dir(project_dir) else {
-        return false;
-    };
-
-    entries.flatten().any(|entry| {
-        let path = entry.path();
-        path.extension().and_then(|ext| ext.to_str()) == Some("jsonl")
-            && path != *jsonl_path
-            && path
-                .metadata()
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .is_some_and(|t| {
-                    t.duration_since(jsonl_mtime)
-                        .ok()
-                        .is_some_and(|gap| gap.as_secs() > 30)
-                })
-    })
+    SessionMode::Default
 }
 
 fn count_active_background(session: &ClaudeSession, tree: &ProcessTree) -> (u32, u32) {
@@ -465,6 +379,25 @@ mod tests {
     }
 
     #[test]
+    fn discover_sessions_reads_status_field() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let json = serde_json::json!({
+            "pid": 99999,
+            "sessionId": "abc-123",
+            "cwd": "/home/user/project",
+            "startedAt": 1700000000_u64,
+            "status": "idle"
+        });
+        std::fs::write(dir.path().join("sess.json"), json.to_string()).expect("write");
+        let tree = ProcessTree::build();
+        let sessions = discover_sessions_in(dir.path(), false, &tree);
+        assert_eq!(
+            sessions.first().expect("session").status.as_deref(),
+            Some("idle")
+        );
+    }
+
+    #[test]
     fn discover_sessions_invalid_json() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("bad.json"), "not json").expect("write");
@@ -555,81 +488,65 @@ mod tests {
     }
 
     #[test]
-    fn parse_jsonl_tail_user_message_last() {
-        let tail = r#"{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn"}}
-{"type":"user","message":{"role":"user"}}"#;
-        let (state, _) = parse_jsonl_tail(tail);
-        assert!(matches!(state, SessionState::Active));
+    fn parse_permission_mode_empty() {
+        assert!(matches!(parse_permission_mode(""), SessionMode::Default));
     }
 
     #[test]
-    fn parse_jsonl_tail_assistant_end_turn() {
-        let tail =
-            r#"{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn"}}"#;
-        let (state, _) = parse_jsonl_tail(tail);
-        assert!(matches!(state, SessionState::Idle));
-    }
-
-    #[test]
-    fn parse_jsonl_tail_assistant_no_stop_reason() {
-        let tail = r#"{"type":"assistant","message":{"role":"assistant"}}"#;
-        let (state, _) = parse_jsonl_tail(tail);
-        assert!(matches!(state, SessionState::Active));
-    }
-
-    #[test]
-    fn parse_jsonl_tail_empty() {
-        let (state, mode) = parse_jsonl_tail("");
-        assert!(matches!(state, SessionState::Active));
-        assert!(matches!(mode, SessionMode::Default));
-    }
-
-    #[test]
-    fn parse_jsonl_tail_permission_plan() {
+    fn parse_permission_mode_plan() {
         let tail = r#"{"permissionMode":"plan"}
 {"type":"user","message":{"role":"user"}}"#;
-        let (_, mode) = parse_jsonl_tail(tail);
+        let mode = parse_permission_mode(tail);
         assert!(matches!(mode, SessionMode::Plan));
     }
 
     #[test]
-    fn parse_jsonl_tail_permission_bypass() {
+    fn parse_permission_mode_bypass() {
         let tail = r#"{"permissionMode":"bypassPermissions"}
 {"type":"user","message":{"role":"user"}}"#;
-        let (_, mode) = parse_jsonl_tail(tail);
+        let mode = parse_permission_mode(tail);
         assert!(matches!(mode, SessionMode::BypassPermissions));
     }
 
     #[test]
-    fn parse_jsonl_tail_permission_accept_edits() {
+    fn parse_permission_mode_accept_edits() {
         let tail = r#"{"permissionMode":"acceptEdits"}
 {"type":"user","message":{"role":"user"}}"#;
-        let (_, mode) = parse_jsonl_tail(tail);
+        let mode = parse_permission_mode(tail);
         assert!(matches!(mode, SessionMode::AcceptEdits));
     }
 
     #[test]
-    fn parse_jsonl_tail_permission_default() {
+    fn parse_permission_mode_default() {
         let tail = r#"{"permissionMode":"default"}
 {"type":"user","message":{"role":"user"}}"#;
-        let (_, mode) = parse_jsonl_tail(tail);
+        let mode = parse_permission_mode(tail);
         assert!(matches!(mode, SessionMode::Default));
     }
 
     #[test]
-    fn parse_jsonl_tail_permission_unknown() {
+    fn parse_permission_mode_unknown() {
         let tail = r#"{"permissionMode":"somethingNew"}
 {"type":"user","message":{"role":"user"}}"#;
-        let (_, mode) = parse_jsonl_tail(tail);
+        let mode = parse_permission_mode(tail);
         assert!(matches!(mode, SessionMode::Default));
     }
 
     fn make_session(session_id: &str, cwd: &str) -> ClaudeSession {
+        make_session_with_status(session_id, cwd, None)
+    }
+
+    fn make_session_with_status(
+        session_id: &str,
+        cwd: &str,
+        status: Option<&str>,
+    ) -> ClaudeSession {
         ClaudeSession {
             pid: 1,
             session_id: session_id.to_owned(),
             cwd: cwd.to_owned(),
             started_at: 0,
+            status: status.map(str::to_owned),
         }
     }
 
@@ -653,12 +570,29 @@ mod tests {
     }
 
     #[test]
-    fn detect_info_idle_session() {
+    fn detect_info_state_follows_busy_status() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let session = make_session("sess-idle", "/home/user");
-        let content =
-            r#"{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn"}}"#;
-        setup_jsonl(dir.path(), "/home/user", "sess-idle", content);
+        let session = make_session_with_status("sess-busy", "/home/user", Some("busy"));
+        let tree = ProcessTree::build();
+        let info = detect_info_in(&session, dir.path(), &tree);
+        assert!(matches!(info.state, SessionState::Active));
+    }
+
+    #[test]
+    fn detect_info_state_defaults_to_active_without_status() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let session = make_session_with_status("sess-unknown", "/home/user", None);
+        let tree = ProcessTree::build();
+        let info = detect_info_in(&session, dir.path(), &tree);
+        assert!(matches!(info.state, SessionState::Active));
+    }
+
+    #[test]
+    fn detect_info_ignores_transcript_when_deciding_state() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let session = make_session_with_status("sess-mismatch", "/home/user", Some("idle"));
+        let content = r#"{"type":"user","message":{"role":"user"}}"#;
+        setup_jsonl(dir.path(), "/home/user", "sess-mismatch", content);
 
         let tree = ProcessTree::build();
         let info = detect_info_in(&session, dir.path(), &tree);
@@ -666,27 +600,32 @@ mod tests {
     }
 
     #[test]
-    fn detect_info_active_user_message() {
+    fn detect_info_reads_mode_without_status() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let session = make_session("sess-active", "/home/user");
-        let content = r#"{"type":"user","message":{"role":"user"}}"#;
-        setup_jsonl(dir.path(), "/home/user", "sess-active", content);
+        let session = make_session_with_status("sess-mode-only", "/home/user", None);
+        setup_jsonl(
+            dir.path(),
+            "/home/user",
+            "sess-mode-only",
+            r#"{"permissionMode":"plan"}"#,
+        );
 
         let tree = ProcessTree::build();
         let info = detect_info_in(&session, dir.path(), &tree);
-        assert!(matches!(info.state, SessionState::Active));
+        assert!(matches!(info.mode, SessionMode::Plan));
     }
 
     #[test]
-    fn detect_info_active_no_stop_reason() {
+    fn detect_info_idle_session() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let session = make_session("sess-nostop", "/home/user");
-        let content = r#"{"type":"assistant","message":{"role":"assistant"}}"#;
-        setup_jsonl(dir.path(), "/home/user", "sess-nostop", content);
+        let session = make_session_with_status("sess-idle", "/home/user", Some("idle"));
+        let content =
+            r#"{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn"}}"#;
+        setup_jsonl(dir.path(), "/home/user", "sess-idle", content);
 
         let tree = ProcessTree::build();
         let info = detect_info_in(&session, dir.path(), &tree);
-        assert!(matches!(info.state, SessionState::Active));
+        assert!(matches!(info.state, SessionState::Idle));
     }
 
     #[test]
@@ -705,7 +644,7 @@ mod tests {
     #[test]
     fn detect_info_bypass_mode() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let session = make_session("sess-yolo", "/home/user");
+        let session = make_session_with_status("sess-yolo", "/home/user", Some("idle"));
         let content = "{\"permissionMode\":\"bypassPermissions\"}\n{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"stop_reason\":\"end_turn\"}}";
         setup_jsonl(dir.path(), "/home/user", "sess-yolo", content);
 
@@ -728,34 +667,15 @@ mod tests {
     }
 
     #[test]
-    fn parse_jsonl_tail_mixed_garbage_and_valid() {
-        let tail =
-            "not json at all\n{invalid json}\n{\"type\":\"user\",\"message\":{\"role\":\"user\"}}";
-        let (state, _) = parse_jsonl_tail(tail);
-        assert!(matches!(state, SessionState::Active));
-    }
-
-    #[test]
-    fn parse_jsonl_tail_only_garbage() {
+    fn parse_permission_mode_only_garbage() {
         let tail = "garbage line 1\n{broken\nmore garbage";
-        let (state, mode) = parse_jsonl_tail(tail);
-        assert!(matches!(state, SessionState::Active));
-        assert!(matches!(mode, SessionMode::Default));
+        assert!(matches!(parse_permission_mode(tail), SessionMode::Default));
     }
 
     #[test]
-    fn parse_jsonl_tail_multiple_messages_uses_last() {
-        let tail = "{\"type\":\"user\",\"message\":{\"role\":\"user\"}}\n{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"stop_reason\":\"end_turn\"}}";
-        let (state, _) = parse_jsonl_tail(tail);
-        assert!(matches!(state, SessionState::Idle));
-    }
-
-    #[test]
-    fn parse_jsonl_tail_mode_on_different_line_than_state() {
-        let tail = "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"stop_reason\":\"end_turn\"}}\n{\"permissionMode\":\"plan\"}";
-        let (state, mode) = parse_jsonl_tail(tail);
-        assert!(matches!(state, SessionState::Idle));
-        assert!(matches!(mode, SessionMode::Plan));
+    fn parse_permission_mode_scans_past_conversation_entries() {
+        let tail = "{\"permissionMode\":\"plan\"}\n{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"stop_reason\":\"end_turn\"}}";
+        assert!(matches!(parse_permission_mode(tail), SessionMode::Plan));
     }
 
     #[test]
@@ -803,6 +723,7 @@ mod tests {
             session_id: "sess-1".to_owned(),
             cwd: "/home/user".to_owned(),
             started_at: 0,
+            status: None,
         };
 
         let result = find_jsonl_path_in(&session, dir.path());
@@ -825,6 +746,7 @@ mod tests {
             session_id: "sess-moved".to_owned(),
             cwd: "/home/user/somewhere/else".to_owned(),
             started_at: 0,
+            status: None,
         };
 
         let result = find_jsonl_path_in(&session, dir.path());
@@ -839,6 +761,7 @@ mod tests {
             session_id: "nonaction".to_owned(),
             cwd: "/home/user".to_owned(),
             started_at: 0,
+            status: None,
         };
         let result = find_jsonl_path_in(&session, dir.path());
         assert!(result.is_none());

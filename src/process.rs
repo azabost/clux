@@ -18,16 +18,6 @@ impl ProcessTree {
         self.proc_available && std::path::Path::new(&format!("/proc/{pid}")).exists()
     }
 
-    pub fn has_children(&self, pid: u32) -> bool {
-        if !self.proc_available {
-            return false;
-        }
-        let children_path = format!("/proc/{pid}/task/{pid}/children");
-        std::fs::read_to_string(&children_path)
-            .ok()
-            .is_some_and(|content| !content.trim().is_empty())
-    }
-
     pub fn descendants_of(&self, pid: u32) -> Vec<u32> {
         if !self.proc_available {
             return Vec::new();
@@ -120,10 +110,6 @@ impl ProcessTree {
 
     pub fn is_alive(&self, pid: u32) -> bool {
         self.parents.contains_key(&pid)
-    }
-
-    pub fn has_children(&self, pid: u32) -> bool {
-        self.children.get(&pid).is_some_and(|kids| !kids.is_empty())
     }
 
     pub fn descendants_of(&self, pid: u32) -> Vec<u32> {
