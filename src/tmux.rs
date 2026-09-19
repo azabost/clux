@@ -4,6 +4,7 @@ use std::process::{Command, Output};
 pub struct PaneInfo {
     pub session_name: String,
     pub target: String,
+    pub title: String,
 }
 
 fn run_tmux(args: &[&str]) -> anyhow::Result<Option<Output>> {
@@ -19,7 +20,7 @@ pub fn list_pane_targets() -> anyhow::Result<HashMap<u32, PaneInfo>> {
         "list-panes",
         "-a",
         "-F",
-        "#{pane_pid}\t#{session_name}:#{window_index}.#{pane_index}\t#{session_name}",
+        "#{pane_pid}\t#{session_name}:#{window_index}.#{pane_index}\t#{session_name}\t#{pane_title}",
     ])?
     else {
         return Ok(HashMap::new());
@@ -31,7 +32,7 @@ pub fn list_pane_targets() -> anyhow::Result<HashMap<u32, PaneInfo>> {
 pub fn parse_pane_targets(stdout: &str) -> HashMap<u32, PaneInfo> {
     let mut map = HashMap::new();
     for line in stdout.lines() {
-        let mut parts = line.splitn(3, '\t');
+        let mut parts = line.splitn(4, '\t');
         if let (Some(pid_str), Some(target), Some(session_name)) =
             (parts.next(), parts.next(), parts.next())
             && let Ok(pid) = pid_str.parse::<u32>()
@@ -41,6 +42,7 @@ pub fn parse_pane_targets(stdout: &str) -> HashMap<u32, PaneInfo> {
                 PaneInfo {
                     session_name: session_name.to_owned(),
                     target: target.to_owned(),
+                    title: parts.next().unwrap_or_default().to_owned(),
                 },
             );
         }

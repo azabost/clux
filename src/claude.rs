@@ -19,6 +19,8 @@ pub struct ClaudeSession {
     pub job_id: Option<String>,
     #[serde(default)]
     pub parked_job_id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 pub enum SessionState {
@@ -680,6 +682,7 @@ mod tests {
             spare: false,
             job_id: None,
             parked_job_id: None,
+            name: None,
         }
     }
 
@@ -860,6 +863,7 @@ mod tests {
             spare: false,
             job_id: None,
             parked_job_id: None,
+            name: None,
         };
 
         let result = find_jsonl_path_in(&session, dir.path());
@@ -886,6 +890,7 @@ mod tests {
             spare: false,
             job_id: None,
             parked_job_id: None,
+            name: None,
         };
 
         let result = find_jsonl_path_in(&session, dir.path());
@@ -904,6 +909,7 @@ mod tests {
             spare: false,
             job_id: None,
             parked_job_id: None,
+            name: None,
         };
         let result = find_jsonl_path_in(&session, dir.path());
         assert!(result.is_none());

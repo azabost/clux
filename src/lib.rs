@@ -5,7 +5,7 @@ pub(crate) mod recent;
 pub(crate) mod tmux;
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 struct SessionCounts {
     active: u32,
@@ -162,26 +162,57 @@ fn sort_entries_recent(
     });
 }
 
-fn attach_id_matches(id: &str, session: &claude::ClaudeSession) -> bool {
-    session
-        .job_id
+fn pane_title_matches(title: &str, session: &claude::ClaudeSession) -> bool {
+    let Some(name) = session
+        .name
         .as_deref()
-        .is_some_and(|job| job.starts_with(id))
-        || session.session_id.starts_with(id)
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+    else {
+        return false;
+    };
+
+    let stripped = title
+        .trim_start_matches(|c: char| !c.is_alphanumeric())
+        .trim();
+
+    !stripped.is_empty() && (stripped == name || name.starts_with(stripped))
 }
 
-fn resolve_pane<'pane>(
-    session: &claude::ClaudeSession,
+fn assign_panes<'panel, 'pane>(
+    panels: &'panel [claude::PanelSession<'panel>],
     pane_map: &'pane HashMap<u32, tmux::PaneInfo>,
     tree: &process::ProcessTree,
-    attached: &[process::AttachClient],
-) -> Option<&'pane tmux::PaneInfo> {
-    process::find_tmux_pane(session.pid, pane_map, tree).or_else(|| {
-        attached
-            .iter()
-            .find(|client| attach_id_matches(&client.id, session))
-            .and_then(|client| process::find_tmux_pane(client.pid, pane_map, tree))
-    })
+) -> Vec<(&'panel claude::PanelSession<'panel>, &'pane tmux::PaneInfo)> {
+    let mut assigned: Vec<(&claude::PanelSession<'_>, &tmux::PaneInfo)> = Vec::new();
+    let mut pending: Vec<&claude::PanelSession<'_>> = Vec::new();
+    let mut claimed: HashSet<&str> = HashSet::new();
+
+    for panel in panels {
+        if let Some(pane) = process::find_tmux_pane(panel.pane_owner.pid, pane_map, tree) {
+            let _ = claimed.insert(pane.target.as_str());
+            assigned.push((panel, pane));
+        } else {
+            pending.push(panel);
+        }
+    }
+
+    for panel in pending {
+        let mut candidates = pane_map.values().filter(|pane| {
+            !claimed.contains(pane.target.as_str())
+                && (pane_title_matches(&pane.title, panel.displayed)
+                    || pane_title_matches(&pane.title, panel.pane_owner))
+        });
+
+        if let Some(pane) = candidates.next()
+            && candidates.next().is_none()
+        {
+            let _ = claimed.insert(pane.target.as_str());
+            assigned.push((panel, pane));
+        }
+    }
+
+    assigned
 }
 
 fn panel_info(panel: &claude::PanelSession, tree: &process::ProcessTree) -> claude::SessionInfo {
@@ -207,15 +238,7 @@ fn gather_list_entries(order: SortOrder) -> anyhow::Result<Vec<ListEntry>> {
     let recaps_enabled = tmux::get_global_option("@clux-recaps")?.as_deref() != Some("off");
 
     let panels = claude::fold_parked_jobs(&sessions);
-    let attached = process::attach_clients();
-
-    let with_panes: Vec<_> = panels
-        .iter()
-        .filter_map(|panel| {
-            resolve_pane(panel.pane_owner, &pane_map, &proc_tree, &attached)
-                .map(|pane| (panel, pane))
-        })
-        .collect();
+    let with_panes = assign_panes(&panels, &pane_map, &proc_tree);
 
     let mut entries: Vec<ListEntry> = with_panes
         .iter()
@@ -314,18 +337,16 @@ pub fn run_update(filter: &str) -> anyhow::Result<()> {
 
     let mut counts: HashMap<String, SessionCounts> = HashMap::new();
 
-    let attached = process::attach_clients();
+    let panels = claude::fold_parked_jobs(&sessions);
 
-    for panel in &claude::fold_parked_jobs(&sessions) {
-        if let Some(pane) = resolve_pane(panel.pane_owner, &pane_map, &proc_tree, &attached) {
-            let info = panel_info(panel, &proc_tree);
-            let entry = counts
-                .entry(pane.session_name.clone())
-                .or_insert(SessionCounts { active: 0, idle: 0 });
-            match info.state {
-                claude::SessionState::Active => entry.active += 1,
-                claude::SessionState::Idle => entry.idle += 1,
-            }
+    for (panel, pane) in assign_panes(&panels, &pane_map, &proc_tree) {
+        let info = panel_info(panel, &proc_tree);
+        let entry = counts
+            .entry(pane.session_name.clone())
+            .or_insert(SessionCounts { active: 0, idle: 0 });
+        match info.state {
+            claude::SessionState::Active => entry.active += 1,
+            claude::SessionState::Idle => entry.idle += 1,
         }
     }
 
@@ -622,35 +643,99 @@ mod tests {
         assert!(result.chars().count() <= 10);
     }
 
-    fn attach_session(session_id: &str, job_id: Option<&str>) -> claude::ClaudeSession {
+    fn named_session(name: Option<&str>) -> claude::ClaudeSession {
         claude::ClaudeSession {
             pid: 1,
-            session_id: session_id.to_owned(),
+            session_id: "f448c44a-ec32-4f86-a97b-f53461f94861".to_owned(),
             cwd: "/home/user".to_owned(),
             started_at: 0,
             status: None,
             spare: false,
-            job_id: job_id.map(str::to_owned),
+            job_id: None,
             parked_job_id: None,
+            name: name.map(str::to_owned),
         }
     }
 
     #[test]
-    fn attach_id_matches_job_id_prefix() {
-        let session = attach_session("f448c44a-ec32-4f86-a97b-f53461f94861", Some("f448c44a"));
-        assert!(attach_id_matches("f448c44a", &session));
+    fn pane_title_matches_plain_name() {
+        let session = named_session(Some("Snackbar fix"));
+        assert!(pane_title_matches("Snackbar fix", &session));
     }
 
     #[test]
-    fn attach_id_matches_session_id_prefix() {
-        let session = attach_session("f448c44a-ec32-4f86-a97b-f53461f94861", None);
-        assert!(attach_id_matches("f448c44a-ec32", &session));
+    fn pane_title_matches_name_behind_status_glyph() {
+        let session = named_session(Some("Snackbar fix"));
+        assert!(pane_title_matches("\u{2733} Snackbar fix", &session));
     }
 
     #[test]
-    fn attach_id_rejects_other_session() {
-        let session = attach_session("6c259df3-16dc-46b2-91ea-7e2f84e5506e", Some("6c259df3"));
-        assert!(!attach_id_matches("f448c44a", &session));
+    fn pane_title_matches_truncated_title() {
+        let session = named_session(Some("Snackbar brak w nowym flow tworzenia folderu"));
+        assert!(pane_title_matches("Snackbar brak w nowym", &session));
+    }
+
+    #[test]
+    fn pane_title_rejects_other_name() {
+        let session = named_session(Some("Snackbar fix"));
+        assert!(!pane_title_matches("some other session", &session));
+    }
+
+    #[test]
+    fn pane_title_rejects_session_without_name() {
+        let session = named_session(None);
+        assert!(!pane_title_matches("Snackbar fix", &session));
+    }
+
+    #[test]
+    fn pane_title_rejects_empty_title() {
+        let session = named_session(Some("Snackbar fix"));
+        assert!(!pane_title_matches("", &session));
+        assert!(!pane_title_matches("   ", &session));
+    }
+
+    fn pane(target: &str, title: &str) -> tmux::PaneInfo {
+        tmux::PaneInfo {
+            session_name: target.split(':').next().unwrap_or(target).to_owned(),
+            target: target.to_owned(),
+            title: title.to_owned(),
+        }
+    }
+
+    #[test]
+    fn assign_panes_binds_unresolved_session_by_title() {
+        let session = named_session(Some("Snackbar fix"));
+        let panels = vec![claude::PanelSession {
+            pane_owner: &session,
+            displayed: &session,
+        }];
+        let mut pane_map = HashMap::new();
+        let _ = pane_map.insert(999_001_u32, pane("work:1.1", "\u{2733} Snackbar fix"));
+        let _ = pane_map.insert(999_002_u32, pane("other:1.1", "unrelated"));
+
+        let assigned = assign_panes(&panels, &pane_map, &process::ProcessTree::build());
+
+        assert_eq!(assigned.len(), 1);
+        assert_eq!(
+            assigned.first().map(|(_, pane)| pane.target.as_str()),
+            Some("work:1.1")
+        );
+    }
+
+    #[test]
+    fn assign_panes_skips_ambiguous_title() {
+        let session = named_session(Some("Snackbar fix"));
+        let panels = vec![claude::PanelSession {
+            pane_owner: &session,
+            displayed: &session,
+        }];
+        let mut pane_map = HashMap::new();
+        let _ = pane_map.insert(999_001_u32, pane("work:1.1", "Snackbar fix"));
+        let _ = pane_map.insert(999_002_u32, pane("work:1.2", "Snackbar fix"));
+
+        let assigned = assign_panes(&panels, &pane_map, &process::ProcessTree::build());
+
+        assert!(assigned.is_empty());
     }
 
     fn make_entry(state: &'static str, mode: &'static str, timestamp: u64) -> ListEntry {
