@@ -11,6 +11,11 @@ hand.
 
 ## [Unreleased]
 
+### Fixed
+
+- publish the release once per tag rather than once per build target, which
+  raced and produced two release records for v0.4.0
+
 ## [0.4.0](https://github.com/azabost/clux/compare/v0.3.5...v0.4.0) - 2026-09-21
 
 First release of this fork.
@@ -45,8 +50,6 @@ First release of this fork.
 - stop overriding idle back to active for a session whose transcript looks stale
   and whose process has children; every session with MCP servers configured has
   children permanently
-- publish the release once per tag rather than once per build target, which
-  raced and produced two release records for v0.4.0
 
 ### Removed
 
