@@ -63,14 +63,7 @@ fn list_runs_without_crash() {
 
 #[test]
 fn list_accepts_sort_flag() {
-    for sort in &[
-        "timestamp-desc",
-        "timestamp-asc",
-        "status",
-        "status-rev",
-        "mode",
-        "mode-rev",
-    ] {
+    for sort in &["timestamp-desc", "timestamp-asc", "status", "status-rev"] {
         let output = clux_bin()
             .args(["list", "--sort", sort])
             .output()
@@ -91,8 +84,8 @@ fn list_output_is_tab_separated() {
         let fields: Vec<&str> = line.split('\t').collect();
         assert_eq!(
             fields.len(),
-            8,
-            "expected 8 tab-separated fields, got {}: {line}",
+            6,
+            "expected 6 tab-separated fields, got {}: {line}",
             fields.len()
         );
     }

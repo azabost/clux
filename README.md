@@ -18,8 +18,7 @@ clux looks at your `~/.claude/sessions/` directory, figures out which Claude Cod
 For each session, clux can tell you:
 
 - **State** -- active (waiting for input) or idle (Claude finished responding)
-- **Mode** -- default, acceptEdits, yolo, or plan
-- **Background work** -- how many tasks and sub-agents are running
+- **Claude session** -- the name Claude Code gave the conversation
 - **Summary** -- what Claude is currently working on
 
 When you hit `prefix + s` to switch sessions, you can see which ones have Claude running in them without having to check each one manually. There's also a dedicated Claude picker (`prefix + a` by default) that shows only sessions with Claude, sorted by most recent activity.
@@ -134,7 +133,7 @@ Commands:
   pick    Open a Claude-only session picker (fzf or tmux menu)
 ```
 
-`clux list` is the most useful one outside of tmux. It prints a tab-separated table of all Claude Code sessions it can find, with their state, mode, task/agent counts, summary, working directory, and tmux session name.
+`clux list` is the most useful one outside of tmux. It prints a tab-separated table of all Claude Code sessions it can find, with their state, Claude session name, summary, working directory, and tmux session name.
 
 `clux update`, `clux select`, and `clux pick` all require tmux to be running.
 
@@ -163,7 +162,7 @@ These options are set in your `.tmux.conf` and only apply when using clux as a t
 
 ### The Claude picker
 
-The Claude picker (`prefix + a`) gives you a focused view of just your Claude sessions. It shows state, mode, task count, sub-agent count, a summary of what Claude is doing, and the working directory. Sessions are sorted by most recently switched-to by default, with the current session pinned to the bottom (like harpoon).
+The Claude picker (`prefix + a`) gives you a focused view of just your Claude sessions. It shows state, the Claude session name, a summary of what Claude is doing, and the working directory. Sessions are sorted by most recently switched-to by default, with the current session pinned to the bottom (like harpoon).
 
 If Claude Code has produced a recap and no conversation message has been written after it, clux uses that recap as the summary. Set `@clux-recaps` to `off` to always use the older history-based summary.
 
@@ -180,16 +179,14 @@ Both the Claude picker and `clux list` support configurable sort order. Set `@cl
 | `timestamp-asc` | Oldest activity first |
 | `status` | Idle first, then active |
 | `status-rev` | Active first, then idle |
-| `mode` | Alphabetical by mode |
-| `mode-rev` | Reverse alphabetical by mode |
 
-Ties are broken by timestamp descending (newest first), except for reversed sorts (`status-rev`, `mode-rev`) which use timestamp ascending.
+Ties are broken by timestamp descending (newest first), except for the reversed sort (`status-rev`) which uses timestamp ascending.
 
 ```sh
 set -g @clux-sort 'status'
 # or via CLI
 clux list --sort status
-clux pick --sort mode-rev
+clux pick --sort status-rev
 ```
 
 ### Format placeholders
@@ -218,7 +215,7 @@ This binds `prefix + s` to the full session picker, `prefix + a` to the Claude p
 - [x] Configurable keybinding
 - [x] Customizable status bar format
 - [x] Session filtering options
-- [x] Claude picker with mode, tasks, and sub-agent info
+- [x] Claude picker with session name and summary
 - [x] fzf integration
 - [x] Standalone CLI with proper `--help`
 - [x] Published on crates.io

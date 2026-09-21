@@ -16,9 +16,7 @@ struct ListEntry {
     target: String,
     session_id: String,
     state: &'static str,
-    mode: &'static str,
-    active_tasks: u32,
-    active_agents: u32,
+    claude_session: String,
     summary: String,
     cwd: String,
     session_name: String,
@@ -33,8 +31,6 @@ pub enum SortOrder {
     TimestampAsc,
     Status,
     StatusRev,
-    Mode,
-    ModeRev,
 }
 
 impl SortOrder {
@@ -45,16 +41,14 @@ impl SortOrder {
             "timestamp-asc" => Self::TimestampAsc,
             "status" => Self::Status,
             "status-rev" => Self::StatusRev,
-            "mode" => Self::Mode,
-            "mode-rev" => Self::ModeRev,
             _ => Self::Recent,
         }
     }
 
     const fn tiebreak_timestamp(self) -> Ordering {
         match self {
-            Self::StatusRev | Self::ModeRev => Ordering::Less,
-            Self::Recent | Self::TimestampDesc | Self::TimestampAsc | Self::Status | Self::Mode => {
+            Self::StatusRev => Ordering::Less,
+            Self::Recent | Self::TimestampDesc | Self::TimestampAsc | Self::Status => {
                 Ordering::Greater
             }
         }
@@ -98,6 +92,16 @@ fn shorten_cwd(cwd: &str) -> String {
     }
 }
 
+fn claude_session_name(session: &claude::ClaudeSession) -> String {
+    session
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or("(unnamed)")
+        .to_owned()
+}
+
 fn truncate_at(text: &str, max_chars: usize) -> String {
     let char_count = text.chars().count();
     if char_count <= max_chars {
@@ -119,8 +123,6 @@ fn sort_entries(entries: &mut [ListEntry], order: SortOrder) {
             SortOrder::TimestampAsc => a.timestamp.cmp(&b.timestamp),
             SortOrder::Status => b.state.cmp(a.state),
             SortOrder::StatusRev => a.state.cmp(b.state),
-            SortOrder::Mode => a.mode.cmp(b.mode),
-            SortOrder::ModeRev => b.mode.cmp(a.mode),
         };
         if primary != Ordering::Equal {
             return primary;
@@ -255,8 +257,8 @@ fn collapse_to_one_row_per_pane<'panel, 'pane>(
     rows
 }
 
-fn pane_row_info(row: &PaneRow, tree: &process::ProcessTree) -> claude::SessionInfo {
-    let mut info = claude::detect_info(row.panel.displayed, tree);
+fn pane_row_info(row: &PaneRow) -> claude::SessionInfo {
+    let mut info = claude::detect_info(row.panel.displayed);
     let mut counted: HashSet<u32> = HashSet::new();
     let _ = counted.insert(row.panel.displayed.pid);
 
@@ -268,12 +270,12 @@ fn pane_row_info(row: &PaneRow, tree: &process::ProcessTree) -> claude::SessionI
         if !counted.insert(session.pid) {
             continue;
         }
-        let extra = claude::detect_info(session, tree);
-        if matches!(extra.state, claude::SessionState::Active) {
+        if matches!(
+            claude::detect_info(session).state,
+            claude::SessionState::Active
+        ) {
             info.state = claude::SessionState::Active;
         }
-        info.active_tasks += extra.active_tasks;
-        info.active_agents += extra.active_agents;
     }
 
     info
@@ -293,16 +295,10 @@ fn gather_list_entries(order: SortOrder) -> anyhow::Result<Vec<ListEntry>> {
         .iter()
         .map(|row| {
             let (session, pane) = (row.panel.displayed, row.pane);
-            let info = pane_row_info(row, &proc_tree);
+            let info = pane_row_info(row);
             let state_str = match info.state {
                 claude::SessionState::Active => "active",
                 claude::SessionState::Idle => "idle",
-            };
-            let mode_str = match info.mode {
-                claude::SessionMode::Default => "default",
-                claude::SessionMode::AcceptEdits => "acceptEdits",
-                claude::SessionMode::BypassPermissions => "yolo",
-                claude::SessionMode::Plan => "plan",
             };
             let summary_text = summaries
                 .get(&session.pid)
@@ -321,9 +317,7 @@ fn gather_list_entries(order: SortOrder) -> anyhow::Result<Vec<ListEntry>> {
                 target: pane.target.clone(),
                 session_id: session.session_id.clone(),
                 state: state_str,
-                mode: mode_str,
-                active_tasks: info.active_tasks,
-                active_agents: info.active_agents,
+                claude_session: claude_session_name(session),
                 summary: display_summary.to_owned(),
                 cwd: shorten_cwd(&session.cwd),
                 session_name: pane.session_name.clone(),
@@ -360,12 +354,10 @@ pub fn run_list(sort: Option<&str>) -> anyhow::Result<()> {
     let entries = gather_list_entries(order)?;
     for entry in &entries {
         println!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}",
             entry.target,
             entry.state,
-            entry.mode,
-            entry.active_tasks,
-            entry.active_agents,
+            entry.claude_session,
             entry.summary,
             entry.cwd,
             entry.session_name
@@ -389,7 +381,7 @@ pub fn run_update(filter: &str) -> anyhow::Result<()> {
     let panels = claude::fold_parked_jobs(&sessions);
 
     for row in assign_panes(&panels, &pane_map, &proc_tree) {
-        let info = pane_row_info(&row, &proc_tree);
+        let info = pane_row_info(&row);
         let entry = counts
             .entry(row.pane.session_name.clone())
             .or_insert(SessionCounts { active: 0, idle: 0 });
@@ -456,20 +448,18 @@ fn pick_with_fzf(entries: &[ListEntry]) -> anyhow::Result<()> {
     use std::io::Write as _;
 
     let header = format!(
-        "{:<7}  {:<11}  {:>5}  {:>6}  {:<40}  {:<25}  {}",
-        "STATE", "MODE", "TASKS", "AGENTS", "SUMMARY", "CWD", "SESSION"
+        "{:<7}  {:<25}  {:<40}  {:<25}  {}",
+        "STATE", "CLAUDE SESSION", "SUMMARY", "CWD", "SESSION"
     );
 
     let rows: Vec<String> = entries
         .iter()
         .map(|entry| {
             format!(
-                "{}\t{:<7}  {:<11}  {:>5}  {:>6}  {:<40}  {:<25}  {}",
+                "{}\t{:<7}  {:<25}  {:<40}  {:<25}  {}",
                 entry.target,
                 entry.state,
-                entry.mode,
-                entry.active_tasks,
-                entry.active_agents,
+                truncate_at(&entry.claude_session, 25),
                 truncate_at(&entry.summary, 40),
                 truncate_at(&entry.cwd, 25),
                 entry.session_name
@@ -526,14 +516,8 @@ fn pick_with_menu(entries: &[ListEntry]) -> anyhow::Result<()> {
         .iter()
         .map(|entry| {
             let label = format!(
-                "{} | {} | {} tasks | {} agents | {} | {} ({})",
-                entry.state,
-                entry.mode,
-                entry.active_tasks,
-                entry.active_agents,
-                entry.summary,
-                entry.cwd,
-                entry.session_name
+                "{} | {} | {} | {} ({})",
+                entry.state, entry.claude_session, entry.summary, entry.cwd, entry.session_name
             );
             (truncate_at(&label, 70), entry.target.clone())
         })
@@ -855,14 +839,12 @@ mod tests {
         );
     }
 
-    fn make_entry(state: &'static str, mode: &'static str, timestamp: u64) -> ListEntry {
+    fn make_entry(state: &'static str, timestamp: u64) -> ListEntry {
         ListEntry {
             target: String::new(),
             session_id: String::new(),
             state,
-            mode,
-            active_tasks: 0,
-            active_agents: 0,
+            claude_session: String::new(),
             summary: String::new(),
             cwd: String::new(),
             session_name: String::new(),
@@ -886,8 +868,6 @@ mod tests {
             SortOrder::parse("status-rev"),
             SortOrder::StatusRev
         ));
-        assert!(matches!(SortOrder::parse("mode"), SortOrder::Mode));
-        assert!(matches!(SortOrder::parse("mode-rev"), SortOrder::ModeRev));
     }
 
     #[test]
@@ -899,9 +879,9 @@ mod tests {
     #[test]
     fn sort_entries_timestamp_desc() {
         let mut entries = vec![
-            make_entry("idle", "default", 100),
-            make_entry("active", "default", 300),
-            make_entry("idle", "default", 200),
+            make_entry("idle", 100),
+            make_entry("active", 300),
+            make_entry("idle", 200),
         ];
         sort_entries(&mut entries, SortOrder::TimestampDesc);
         assert_eq!(entries[0].timestamp, 300);
@@ -912,9 +892,9 @@ mod tests {
     #[test]
     fn sort_entries_timestamp_asc() {
         let mut entries = vec![
-            make_entry("idle", "default", 300),
-            make_entry("active", "default", 100),
-            make_entry("idle", "default", 200),
+            make_entry("idle", 300),
+            make_entry("active", 100),
+            make_entry("idle", 200),
         ];
         sort_entries(&mut entries, SortOrder::TimestampAsc);
         assert_eq!(entries[0].timestamp, 100);
@@ -925,9 +905,9 @@ mod tests {
     #[test]
     fn sort_entries_status_idle_first() {
         let mut entries = vec![
-            make_entry("active", "default", 300),
-            make_entry("idle", "default", 100),
-            make_entry("active", "default", 200),
+            make_entry("active", 300),
+            make_entry("idle", 100),
+            make_entry("active", 200),
         ];
         sort_entries(&mut entries, SortOrder::Status);
         assert_eq!(entries[0].state, "idle");
@@ -938,9 +918,9 @@ mod tests {
     #[test]
     fn sort_entries_status_tiebreaks_by_timestamp_desc() {
         let mut entries = vec![
-            make_entry("active", "default", 100),
-            make_entry("active", "default", 300),
-            make_entry("active", "default", 200),
+            make_entry("active", 100),
+            make_entry("active", 300),
+            make_entry("active", 200),
         ];
         sort_entries(&mut entries, SortOrder::Status);
         assert_eq!(entries[0].timestamp, 300);
@@ -951,9 +931,9 @@ mod tests {
     #[test]
     fn sort_entries_status_rev_active_first() {
         let mut entries = vec![
-            make_entry("active", "default", 200),
-            make_entry("idle", "default", 300),
-            make_entry("idle", "default", 100),
+            make_entry("active", 200),
+            make_entry("idle", 300),
+            make_entry("idle", 100),
         ];
         sort_entries(&mut entries, SortOrder::StatusRev);
         assert_eq!(entries[0].state, "active");
@@ -962,37 +942,11 @@ mod tests {
     }
 
     #[test]
-    fn sort_entries_mode_alphabetical() {
-        let mut entries = vec![
-            make_entry("active", "yolo", 100),
-            make_entry("active", "acceptEdits", 200),
-            make_entry("active", "default", 300),
-        ];
-        sort_entries(&mut entries, SortOrder::Mode);
-        assert_eq!(entries[0].mode, "acceptEdits");
-        assert_eq!(entries[1].mode, "default");
-        assert_eq!(entries[2].mode, "yolo");
-    }
-
-    #[test]
-    fn sort_entries_mode_rev() {
-        let mut entries = vec![
-            make_entry("active", "acceptEdits", 200),
-            make_entry("active", "yolo", 100),
-            make_entry("active", "default", 300),
-        ];
-        sort_entries(&mut entries, SortOrder::ModeRev);
-        assert_eq!(entries[0].mode, "yolo");
-        assert_eq!(entries[1].mode, "default");
-        assert_eq!(entries[2].mode, "acceptEdits");
-    }
-
-    #[test]
     fn sort_entries_status_rev_tiebreaks_by_timestamp_asc() {
         let mut entries = vec![
-            make_entry("idle", "default", 100),
-            make_entry("idle", "default", 300),
-            make_entry("idle", "default", 200),
+            make_entry("idle", 100),
+            make_entry("idle", 300),
+            make_entry("idle", 200),
         ];
         sort_entries(&mut entries, SortOrder::StatusRev);
         assert_eq!(entries[0].timestamp, 100);
@@ -1001,37 +955,11 @@ mod tests {
     }
 
     #[test]
-    fn sort_entries_mode_tiebreaks_by_timestamp_desc() {
-        let mut entries = vec![
-            make_entry("active", "default", 100),
-            make_entry("active", "default", 300),
-            make_entry("active", "default", 200),
-        ];
-        sort_entries(&mut entries, SortOrder::Mode);
-        assert_eq!(entries[0].timestamp, 300);
-        assert_eq!(entries[1].timestamp, 200);
-        assert_eq!(entries[2].timestamp, 100);
-    }
-
-    #[test]
-    fn sort_entries_mode_rev_tiebreaks_by_timestamp_asc() {
-        let mut entries = vec![
-            make_entry("idle", "yolo", 200),
-            make_entry("idle", "yolo", 100),
-            make_entry("idle", "yolo", 300),
-        ];
-        sort_entries(&mut entries, SortOrder::ModeRev);
-        assert_eq!(entries[0].timestamp, 100);
-        assert_eq!(entries[1].timestamp, 200);
-        assert_eq!(entries[2].timestamp, 300);
-    }
-
-    #[test]
     fn sort_entries_timestamp_asc_tiebreaks_by_timestamp_desc() {
         let mut entries = vec![
-            make_entry("active", "default", 300),
-            make_entry("idle", "default", 100),
-            make_entry("active", "default", 200),
+            make_entry("active", 300),
+            make_entry("idle", 100),
+            make_entry("active", 200),
         ];
         sort_entries(&mut entries, SortOrder::TimestampAsc);
         assert_eq!(entries[0].timestamp, 100);
@@ -1048,8 +976,8 @@ mod tests {
 
     #[test]
     fn sort_entries_single() {
-        let mut entries = vec![make_entry("active", "default", 100)];
-        sort_entries(&mut entries, SortOrder::Mode);
+        let mut entries = vec![make_entry("active", 100)];
+        sort_entries(&mut entries, SortOrder::Status);
         assert_eq!(entries[0].timestamp, 100);
     }
 
@@ -1058,9 +986,7 @@ mod tests {
             target: target.to_owned(),
             session_id: session_id.to_owned(),
             state: "active",
-            mode: "default",
-            active_tasks: 0,
-            active_agents: 0,
+            claude_session: String::new(),
             summary: String::new(),
             cwd: String::new(),
             session_name: String::new(),
