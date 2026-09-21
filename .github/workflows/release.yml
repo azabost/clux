@@ -5,11 +5,11 @@ on:
     tags:
       - "v*"
 
-permissions:
-  contents: write
-
 jobs:
   build:
+    permissions:
+      contents: read
+
     strategy:
       fail-fast: false
       matrix:
@@ -49,7 +49,33 @@ jobs:
       - name: Rename binary
         run: cp target/${{ matrix.target }}/release/clux ${{ matrix.asset }}
 
-      - name: Upload release asset
+      # Hand the binary to the release job instead of publishing it here. Four
+      # matrix jobs each creating the release raced and produced two release
+      # records for one tag, and a binary can land on the one left as a draft -
+      # which /releases/latest skips, so install.sh would find nothing.
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Publish release
         uses: softprops/action-gh-release@v3
         with:
-          files: ${{ matrix.asset }}
+          files: artifacts/*/*
+          fail_on_unmatched_files: true
