@@ -36,37 +36,21 @@ activity.
 
 ## What's different from upstream
 
-**State comes from Claude Code, not from guesswork.** Claude Code records a
-`status` field (`busy`, `shell`, `idle`, `waiting`) in
-`~/.claude/sessions/<pid>.json` and keeps it current. Upstream instead reads the
-tail of the conversation transcript and infers state from the last `stop_reason`,
-then overrides idle back to active when the transcript looks stale and the
-process has children -- which is true of every session with MCP servers
-configured. The status field is read directly here and the heuristic is gone.
+Session state comes from the `status` field Claude Code maintains in
+`~/.claude/sessions/<pid>.json`, rather than being inferred from the tail of the
+conversation transcript. The transcript, still read for the summary, is located
+correctly for working directories holding characters other than `/` -- every
+`git worktree` under `.claude/worktrees/` among them.
 
-**The transcript is actually found.** The directory under `~/.claude/projects/`
-is derived from the session's working directory, and Claude Code replaces *every*
-non-alphanumeric character with `-`. Upstream replaces only `/`, so any path
-containing a dot -- `~/.config/nvim`, or any `git worktree` under
-`.claude/worktrees/` -- resolved to a directory that does not exist. When the
-lookup still misses, because a session changed its working directory, the
-transcript is located by session id instead.
+The background sessions Claude Code 2.x creates are recognised: pre-warmed
+spares are skipped, a parked conversation is folded into the pane it was parked
+from, and a daemon-held session is bound to its pane through the pane title.
+Each pane gets one row, describing the conversation it is actually showing.
 
-**Background sessions are understood.** Claude Code 2.x keeps pre-warmed spare
-sessions, parks conversations into daemon-held background sessions, and can
-reattach them to a terminal. clux skips the spares, folds a parked job into the
-pane it was parked from, and binds a daemon-held session to its pane through the
-pane title -- such a session has no `TMUX_PANE` in its environment and its parent
-chain ends at the daemon, so the process tree cannot reach it.
+`clux list` prints six tab-separated fields rather than eight; `mode`, `tasks`
+and `agents` are gone and a `claude session` column took their place.
 
-**One row per pane.** A pane can hold several live conversations at once, for
-instance after `/fork`. They all resolve to the same pane and only one of them is
-on screen, so they collapse into a single row and the pane title decides which
-conversation the row describes. The others still contribute their state, so a
-pane whose hidden conversation is working still reads as active.
-
-**Fewer columns.** `mode`, `tasks` and `agents` are gone, and with them the
-`lsof` call that backed the counts. The Claude session name took their place.
+See the [changelog](CHANGELOG.md) for when each of these landed.
 
 ## Getting started
 
@@ -105,31 +89,6 @@ Pre-built binaries are available for Linux and macOS, x86_64 and aarch64.
 ```sh
 cargo install --git https://github.com/azabost/clux
 ```
-
-### NixOS / Home Manager
-
-The plugin normally downloads its binary at startup, which fails in the nix store
-since it is read-only. Use the flake instead.
-
-```nix
-inputs.clux.url = "github:azabost/clux";
-```
-
-Then in your home config:
-
-```nix
-{ inputs, pkgs, ... }: {
-  # gives you `clux` on your PATH outside of tmux too
-  home.packages = [ inputs.clux.packages.${pkgs.system}.default ];
-
-  programs.tmux.plugins = [
-    inputs.clux.packages.${pkgs.system}.tmuxPlugin
-  ];
-}
-```
-
-`tmuxPlugin` has the binary bundled in the store, so there is no download at
-startup.
 
 ## CLI usage
 
