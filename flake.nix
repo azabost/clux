@@ -20,7 +20,7 @@
             cargoLock.lockFile = ./Cargo.lock;
             meta = with pkgs.lib; {
               description = "tmux plugin that shows Claude Code session status";
-              homepage = "https://github.com/calthejuggler/clux";
+              homepage = "https://github.com/azabost/clux";
               license = licenses.mit;
               maintainers = [ ];
               mainProgram = "clux";
