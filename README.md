@@ -8,10 +8,7 @@ sessions. Also works as a standalone CLI.
 Written in Rust.
 
 > **This is a fork** of [calthejuggler/clux](https://github.com/calthejuggler/clux).
-> It reads session state from the file Claude Code maintains rather than inferring
-> it, and it understands the background sessions Claude Code 2.x creates. See
-> [What's different](#whats-different-from-upstream). Not published to crates.io —
-> install it from this repository.
+> See the [changelog](CHANGELOG.md) for what changed.
 
 ## What it does
 
@@ -33,24 +30,6 @@ activity.
 ![Session picker with Claude status](assets/session-picker.png)
 
 ![Claude picker with fzf](assets/claude-picker.png)
-
-## What's different from upstream
-
-Session state comes from the `status` field Claude Code maintains in
-`~/.claude/sessions/<pid>.json`, rather than being inferred from the tail of the
-conversation transcript. The transcript, still read for the summary, is located
-correctly for working directories holding characters other than `/` -- every
-`git worktree` under `.claude/worktrees/` among them.
-
-The background sessions Claude Code 2.x creates are recognised: pre-warmed
-spares are skipped, a parked conversation is folded into the pane it was parked
-from, and a daemon-held session is bound to its pane through the pane title.
-Each pane gets one row, describing the conversation it is actually showing.
-
-`clux list` prints six tab-separated fields rather than eight; `mode`, `tasks`
-and `agents` are gone and a `claude session` column took their place.
-
-See the [changelog](CHANGELOG.md) for when each of these landed.
 
 ## Getting started
 
