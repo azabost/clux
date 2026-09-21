@@ -179,19 +179,30 @@ fn pane_title_matches(title: &str, session: &claude::ClaudeSession) -> bool {
     !stripped.is_empty() && (stripped == name || name.starts_with(stripped))
 }
 
+struct PaneRow<'panel, 'pane> {
+    panel: &'panel claude::PanelSession<'panel>,
+    pane: &'pane tmux::PaneInfo,
+    hidden: Vec<&'panel claude::PanelSession<'panel>>,
+}
+
+fn panel_shown_in_pane(panel: &claude::PanelSession, pane: &tmux::PaneInfo) -> bool {
+    pane_title_matches(&pane.title, panel.displayed)
+        || pane_title_matches(&pane.title, panel.pane_owner)
+}
+
 fn assign_panes<'panel, 'pane>(
     panels: &'panel [claude::PanelSession<'panel>],
     pane_map: &'pane HashMap<u32, tmux::PaneInfo>,
     tree: &process::ProcessTree,
-) -> Vec<(&'panel claude::PanelSession<'panel>, &'pane tmux::PaneInfo)> {
-    let mut assigned: Vec<(&claude::PanelSession<'_>, &tmux::PaneInfo)> = Vec::new();
+) -> Vec<PaneRow<'panel, 'pane>> {
+    let mut resolved: Vec<(&claude::PanelSession<'_>, &tmux::PaneInfo)> = Vec::new();
     let mut pending: Vec<&claude::PanelSession<'_>> = Vec::new();
     let mut claimed: HashSet<&str> = HashSet::new();
 
     for panel in panels {
         if let Some(pane) = process::find_tmux_pane(panel.pane_owner.pid, pane_map, tree) {
             let _ = claimed.insert(pane.target.as_str());
-            assigned.push((panel, pane));
+            resolved.push((panel, pane));
         } else {
             pending.push(panel);
         }
@@ -199,32 +210,70 @@ fn assign_panes<'panel, 'pane>(
 
     for panel in pending {
         let mut candidates = pane_map.values().filter(|pane| {
-            !claimed.contains(pane.target.as_str())
-                && (pane_title_matches(&pane.title, panel.displayed)
-                    || pane_title_matches(&pane.title, panel.pane_owner))
+            !claimed.contains(pane.target.as_str()) && panel_shown_in_pane(panel, pane)
         });
 
         if let Some(pane) = candidates.next()
             && candidates.next().is_none()
         {
             let _ = claimed.insert(pane.target.as_str());
-            assigned.push((panel, pane));
+            resolved.push((panel, pane));
         }
     }
 
-    assigned
+    collapse_to_one_row_per_pane(resolved)
 }
 
-fn panel_info(panel: &claude::PanelSession, tree: &process::ProcessTree) -> claude::SessionInfo {
-    let mut info = claude::detect_info(panel.displayed, tree);
+fn collapse_to_one_row_per_pane<'panel, 'pane>(
+    resolved: Vec<(&'panel claude::PanelSession<'panel>, &'pane tmux::PaneInfo)>,
+) -> Vec<PaneRow<'panel, 'pane>> {
+    let mut rows: Vec<PaneRow<'panel, 'pane>> = Vec::new();
+    let mut index: HashMap<&str, usize> = HashMap::new();
 
-    if panel.displayed.pid != panel.pane_owner.pid
-        && matches!(
-            claude::detect_info(panel.pane_owner, tree).state,
-            claude::SessionState::Active
-        )
-    {
-        info.state = claude::SessionState::Active;
+    for (panel, pane) in resolved {
+        let Some(row) = index
+            .get(pane.target.as_str())
+            .and_then(|position| rows.get_mut(*position))
+        else {
+            let _ = index.insert(pane.target.as_str(), rows.len());
+            rows.push(PaneRow {
+                panel,
+                pane,
+                hidden: Vec::new(),
+            });
+            continue;
+        };
+
+        if panel_shown_in_pane(panel, pane) && !panel_shown_in_pane(row.panel, pane) {
+            row.hidden.push(row.panel);
+            row.panel = panel;
+        } else {
+            row.hidden.push(panel);
+        }
+    }
+
+    rows
+}
+
+fn pane_row_info(row: &PaneRow, tree: &process::ProcessTree) -> claude::SessionInfo {
+    let mut info = claude::detect_info(row.panel.displayed, tree);
+    let mut counted: HashSet<u32> = HashSet::new();
+    let _ = counted.insert(row.panel.displayed.pid);
+
+    let behind = std::iter::once(row.panel)
+        .chain(row.hidden.iter().copied())
+        .flat_map(|panel| [panel.pane_owner, panel.displayed]);
+
+    for session in behind {
+        if !counted.insert(session.pid) {
+            continue;
+        }
+        let extra = claude::detect_info(session, tree);
+        if matches!(extra.state, claude::SessionState::Active) {
+            info.state = claude::SessionState::Active;
+        }
+        info.active_tasks += extra.active_tasks;
+        info.active_agents += extra.active_agents;
     }
 
     info
@@ -242,9 +291,9 @@ fn gather_list_entries(order: SortOrder) -> anyhow::Result<Vec<ListEntry>> {
 
     let mut entries: Vec<ListEntry> = with_panes
         .iter()
-        .map(|(panel, pane)| {
-            let session = panel.displayed;
-            let info = panel_info(panel, &proc_tree);
+        .map(|row| {
+            let (session, pane) = (row.panel.displayed, row.pane);
+            let info = pane_row_info(row, &proc_tree);
             let state_str = match info.state {
                 claude::SessionState::Active => "active",
                 claude::SessionState::Idle => "idle",
@@ -339,10 +388,10 @@ pub fn run_update(filter: &str) -> anyhow::Result<()> {
 
     let panels = claude::fold_parked_jobs(&sessions);
 
-    for (panel, pane) in assign_panes(&panels, &pane_map, &proc_tree) {
-        let info = panel_info(panel, &proc_tree);
+    for row in assign_panes(&panels, &pane_map, &proc_tree) {
+        let info = pane_row_info(&row, &proc_tree);
         let entry = counts
-            .entry(pane.session_name.clone())
+            .entry(row.pane.session_name.clone())
             .or_insert(SessionCounts { active: 0, idle: 0 });
         match info.state {
             claude::SessionState::Active => entry.active += 1,
@@ -717,7 +766,7 @@ mod tests {
 
         assert_eq!(assigned.len(), 1);
         assert_eq!(
-            assigned.first().map(|(_, pane)| pane.target.as_str()),
+            assigned.first().map(|row| row.pane.target.as_str()),
             Some("work:1.1")
         );
     }
@@ -736,6 +785,74 @@ mod tests {
         let assigned = assign_panes(&panels, &pane_map, &process::ProcessTree::build());
 
         assert!(assigned.is_empty());
+    }
+
+    #[test]
+    fn assign_panes_keeps_one_row_per_pane_and_lets_the_title_decide() {
+        let hidden = named_session(Some("Snackbar brak w nowym flow"));
+        let shown = named_session(Some("MKL-710-process-death"));
+        let panels = vec![
+            claude::PanelSession {
+                pane_owner: &hidden,
+                displayed: &hidden,
+            },
+            claude::PanelSession {
+                pane_owner: &shown,
+                displayed: &shown,
+            },
+        ];
+        let mut pane_map = HashMap::new();
+        let _ = pane_map.insert(
+            999_001_u32,
+            pane("work:1.1", "\u{2733} MKL-710-process-death"),
+        );
+
+        let rows = collapse_to_one_row_per_pane(
+            panels
+                .iter()
+                .map(|panel| (panel, pane_map.get(&999_001_u32).expect("pane")))
+                .collect(),
+        );
+
+        assert_eq!(rows.len(), 1);
+        let row = rows.first().expect("row");
+        assert_eq!(
+            row.panel.displayed.name.as_deref(),
+            Some("MKL-710-process-death")
+        );
+        assert_eq!(row.hidden.len(), 1);
+    }
+
+    #[test]
+    fn assign_panes_keeps_the_first_row_when_the_title_matches_nobody() {
+        let first = named_session(Some("first"));
+        let second = named_session(Some("second"));
+        let panels = vec![
+            claude::PanelSession {
+                pane_owner: &first,
+                displayed: &first,
+            },
+            claude::PanelSession {
+                pane_owner: &second,
+                displayed: &second,
+            },
+        ];
+        let mut pane_map = HashMap::new();
+        let _ = pane_map.insert(999_001_u32, pane("work:1.1", "claude agents"));
+
+        let rows = collapse_to_one_row_per_pane(
+            panels
+                .iter()
+                .map(|panel| (panel, pane_map.get(&999_001_u32).expect("pane")))
+                .collect(),
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows.first()
+                .and_then(|row| row.panel.displayed.name.as_deref()),
+            Some("first")
+        );
     }
 
     fn make_entry(state: &'static str, mode: &'static str, timestamp: u64) -> ListEntry {
