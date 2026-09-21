@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-REPO="calthejuggler/clux"
+REPO="azabost/clux"
 
 get_platform() {
     local os arch

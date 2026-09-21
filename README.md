@@ -1,84 +1,118 @@
 # clux
 
-[![Contributors][contributors-shield]][contributors-url]
-[![Forks][forks-shield]][forks-url]
-[![Stargazers][stars-shield]][stars-url]
-[![Issues][issues-shield]][issues-url]
 [![MIT License][license-shield]][license-url]
-[![Crates.io][crates-shield]][crates-url]
 
-A tmux plugin that shows the status of Claude Code sessions running in your tmux sessions. Also works as a standalone CLI.
+A tmux plugin that shows the status of Claude Code sessions running in your tmux
+sessions. Also works as a standalone CLI.
 
 Written in Rust.
 
+> **This is a fork** of [calthejuggler/clux](https://github.com/calthejuggler/clux).
+> It reads session state from the file Claude Code maintains rather than inferring
+> it, and it understands the background sessions Claude Code 2.x creates. See
+> [What's different](#whats-different-from-upstream). Not published to crates.io —
+> install it from this repository.
+
 ## What it does
 
-clux looks at your `~/.claude/sessions/` directory, figures out which Claude Code sessions are running, and maps them to your tmux panes by walking the process tree. It then shows you the status of each session right in your tmux session picker.
+clux looks at `~/.claude/sessions/`, works out which Claude Code sessions are
+running, and maps each one to the tmux pane it lives in. It then shows their
+status right in your tmux session picker.
 
-For each session, clux can tell you:
+For each session it tells you:
 
-- **State** -- active (waiting for input) or idle (Claude finished responding)
+- **State** -- active (Claude is working) or idle (Claude finished and is waiting for you)
 - **Claude session** -- the name Claude Code gave the conversation
-- **Summary** -- what Claude is currently working on
+- **Summary** -- what Claude is working on, from its recap or your last prompt
 
-When you hit `prefix + s` to switch sessions, you can see which ones have Claude running in them without having to check each one manually. There's also a dedicated Claude picker (`prefix + a` by default) that shows only sessions with Claude, sorted by most recent activity.
+When you hit `prefix + s` to switch sessions you can see which ones have Claude
+running without checking each one by hand. There is also a dedicated Claude
+picker (`prefix + a`) showing only sessions with Claude, sorted by most recent
+activity.
 
 ![Session picker with Claude status](assets/session-picker.png)
 
 ![Claude picker with fzf](assets/claude-picker.png)
 
+## What's different from upstream
+
+**State comes from Claude Code, not from guesswork.** Claude Code records a
+`status` field (`busy`, `shell`, `idle`, `waiting`) in
+`~/.claude/sessions/<pid>.json` and keeps it current. Upstream instead reads the
+tail of the conversation transcript and infers state from the last `stop_reason`,
+then overrides idle back to active when the transcript looks stale and the
+process has children -- which is true of every session with MCP servers
+configured. The status field is read directly here and the heuristic is gone.
+
+**The transcript is actually found.** The directory under `~/.claude/projects/`
+is derived from the session's working directory, and Claude Code replaces *every*
+non-alphanumeric character with `-`. Upstream replaces only `/`, so any path
+containing a dot -- `~/.config/nvim`, or any `git worktree` under
+`.claude/worktrees/` -- resolved to a directory that does not exist. When the
+lookup still misses, because a session changed its working directory, the
+transcript is located by session id instead.
+
+**Background sessions are understood.** Claude Code 2.x keeps pre-warmed spare
+sessions, parks conversations into daemon-held background sessions, and can
+reattach them to a terminal. clux skips the spares, folds a parked job into the
+pane it was parked from, and binds a daemon-held session to its pane through the
+pane title -- such a session has no `TMUX_PANE` in its environment and its parent
+chain ends at the daemon, so the process tree cannot reach it.
+
+**One row per pane.** A pane can hold several live conversations at once, for
+instance after `/fork`. They all resolve to the same pane and only one of them is
+on screen, so they collapse into a single row and the pane title decides which
+conversation the row describes. The others still contribute their state, so a
+pane whose hidden conversation is working still reads as active.
+
+**Fewer columns.** `mode`, `tasks` and `agents` are gone, and with them the
+`lsof` call that backed the counts. The Claude session name took their place.
+
 ## Getting started
 
-You need [tmux](https://github.com/tmux/tmux) and [Claude Code](https://claude.ai/code) installed.
+You need [tmux](https://github.com/tmux/tmux) and [Claude Code](https://claude.ai/code).
 
 ### Install as a tmux plugin (recommended)
 
 Add this to your `.tmux.conf`:
 
 ```sh
-set -g @plugin 'calthejuggler/clux'
+set -g @plugin 'azabost/clux'
 ```
 
-Then press `prefix + I` to install.
+Then press `prefix + I` to install. The plugin downloads a pre-built binary for
+your platform on first load, and again whenever the version changes.
 
 ### Install as a standalone CLI
-
-If you just want the `clux` binary without the tmux plugin setup, you have a few options.
-
-**From crates.io:**
-
-```sh
-cargo install clux
-```
 
 **From the latest release:**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/calthejuggler/clux/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/azabost/clux/main/scripts/install.sh | bash
 ```
 
-This downloads a pre-built binary for your platform to `~/.local/bin/clux`. You can also pass a custom path:
+This downloads a pre-built binary to `~/.local/bin/clux`. You can pass a custom
+path:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/calthejuggler/clux/main/scripts/install.sh | bash -s -- /usr/local/bin/clux
+curl -fsSL https://raw.githubusercontent.com/azabost/clux/main/scripts/install.sh | bash -s -- /usr/local/bin/clux
 ```
 
-Pre-built binaries are available for Linux and macOS (both x86_64 and aarch64).
+Pre-built binaries are available for Linux and macOS, x86_64 and aarch64.
 
 **From source:**
 
 ```sh
-cargo install --git https://github.com/calthejuggler/clux
+cargo install --git https://github.com/azabost/clux
 ```
 
 ### NixOS / Home Manager
 
-The plugin normally downloads its binary at startup, which fails in the nix store since it's read-only. The easiest fix is to use the flake.
-
-Add clux to your flake inputs:
+The plugin normally downloads its binary at startup, which fails in the nix store
+since it is read-only. Use the flake instead.
 
 ```nix
-inputs.clux.url = "github:calthejuggler/clux";
+inputs.clux.url = "github:azabost/clux";
 ```
 
 Then in your home config:
@@ -94,32 +128,8 @@ Then in your home config:
 }
 ```
 
-`tmuxPlugin` has the binary bundled in the store, so there's no download at startup.
-
-### Canary builds
-
-Development lands on the `next` branch before it reaches `main`. If you want new
-features early and don't mind the occasional rough edge, you can track `next`
-instead of a release.
-
-**Nix flake:**
-
-```nix
-inputs.clux.url = "github:calthejuggler/clux/next";
-```
-
-**tmux plugin:**
-
-```sh
-set -g @plugin 'calthejuggler/clux#next'
-```
-
-Both build from source, so you get whatever is on `next` when you update. Drop
-the `/next` or `#next` suffix to go back to stable.
-
-Canary builds aren't published to crates.io and have no pre-built binaries --
-`install.sh` always fetches the latest stable release. Expect tmux options to
-change without notice on `next`.
+`tmuxPlugin` has the binary bundled in the store, so there is no download at
+startup.
 
 ## CLI usage
 
@@ -133,9 +143,11 @@ Commands:
   pick    Open a Claude-only session picker (fzf or tmux menu)
 ```
 
-`clux list` is the most useful one outside of tmux. It prints a tab-separated table of all Claude Code sessions it can find, with their state, Claude session name, summary, working directory, and tmux session name.
+`clux list` is the most useful one outside tmux. It prints a tab-separated table
+of every Claude Code session it can find, with its state, Claude session name,
+summary, working directory and tmux session name.
 
-`clux update`, `clux select`, and `clux pick` all require tmux to be running.
+`clux update`, `clux select` and `clux pick` all require tmux to be running.
 
 Each command that accepts a filter argument supports these values:
 
@@ -143,12 +155,13 @@ Each command that accepts a filter argument supports these values:
 |--------|-------|
 | `all` | All sessions (default) |
 | `has-claude` | Only sessions with Claude running |
-| `active` | Only sessions with Claude waiting for input |
-| `idle` | Only sessions where Claude finished responding |
+| `active` | Only sessions where Claude is working |
+| `idle` | Only sessions where Claude finished and is waiting for you |
 
 ## Configuration
 
-These options are set in your `.tmux.conf` and only apply when using clux as a tmux plugin.
+These options go in your `.tmux.conf` and only apply when using clux as a tmux
+plugin.
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -162,15 +175,24 @@ These options are set in your `.tmux.conf` and only apply when using clux as a t
 
 ### The Claude picker
 
-The Claude picker (`prefix + a`) gives you a focused view of just your Claude sessions. It shows state, the Claude session name, a summary of what Claude is doing, and the working directory. Sessions are sorted by most recently switched-to by default, with the current session pinned to the bottom (like harpoon).
+The Claude picker (`prefix + a`) gives you a focused view of just your Claude
+sessions: state, the Claude session name, a summary of what Claude is doing, and
+the working directory. Sessions are sorted by most recently switched-to by
+default, with the current session pinned to the bottom (like harpoon).
 
-If Claude Code has produced a recap and no conversation message has been written after it, clux uses that recap as the summary. Set `@clux-recaps` to `off` to always use the older history-based summary.
+If Claude Code has produced a recap and no conversation message has been written
+after it, clux uses that recap as the summary. Set `@clux-recaps` to `off` to
+always use the older history-based summary.
 
-If you have `fzf-tmux` installed, it uses that for fuzzy finding. Otherwise it falls back to a tmux display-menu. You can force the menu with `set -g @clux-fzf 'off'`.
+If you have `fzf-tmux` installed it is used for fuzzy finding. Otherwise clux
+falls back to a tmux display-menu, which you can force with
+`set -g @clux-fzf 'off'`.
 
 ### Sort order
 
-Both the Claude picker and `clux list` support configurable sort order. Set `@clux-sort` in your `.tmux.conf` or use the `--sort` CLI flag (which takes precedence).
+Both the Claude picker and `clux list` support a configurable sort order. Set
+`@clux-sort` in your `.tmux.conf` or use the `--sort` CLI flag, which takes
+precedence.
 
 | Value | Description |
 |-------|-------------|
@@ -180,7 +202,8 @@ Both the Claude picker and `clux list` support configurable sort order. Set `@cl
 | `status` | Idle first, then active |
 | `status-rev` | Active first, then idle |
 
-Ties are broken by timestamp descending (newest first), except for the reversed sort (`status-rev`) which uses timestamp ascending.
+Ties break by timestamp descending, except for `status-rev` which uses timestamp
+ascending.
 
 ```sh
 set -g @clux-sort 'status'
@@ -194,8 +217,8 @@ clux pick --sort status-rev
 | Placeholder | Description | Example |
 |-------------|-------------|---------|
 | `{total}` | Total Claude sessions | `3` |
-| `{active}` | Sessions waiting for input | `2` |
-| `{idle}` | Sessions finished responding | `1` |
+| `{active}` | Sessions where Claude is working | `2` |
+| `{idle}` | Sessions where Claude finished | `1` |
 | `{detail}` | Smart summary (omits zero counts) | `2 active, 1 idle` |
 
 ### Example
@@ -208,44 +231,18 @@ set -g @clux-filter-binds 'S:has-claude,A:active,I:idle'
 set -g @clux-sort 'status'
 ```
 
-This binds `prefix + s` to the full session picker, `prefix + a` to the Claude picker, `prefix + S` to show only sessions with Claude, `prefix + A` for active sessions, and `prefix + I` for idle sessions. The Claude picker and list command sort idle sessions first.
+This binds `prefix + s` to the full session picker, `prefix + a` to the Claude
+picker, `prefix + S` to show only sessions with Claude, `prefix + A` for active
+sessions and `prefix + I` for idle ones, and sorts idle sessions first.
 
-## Roadmap
+## Credits
 
-- [x] Configurable keybinding
-- [x] Customizable status bar format
-- [x] Session filtering options
-- [x] Claude picker with session name and summary
-- [x] fzf integration
-- [x] Standalone CLI with proper `--help`
-- [x] Published on crates.io
-- [x] Configurable sort order
-- [ ] Other coding agent softwares
-
-Check the [open issues](https://github.com/calthejuggler/clux/issues) for more.
-
-## Contributing
-
-If you have an idea or find a bug, open an issue or submit a pull request. Fork the repo, make your changes on a branch, and open a PR.
-
-## Contact
-
-Cal Courtney - [@calthejuggler](https://github.com/calthejuggler)
-
-## Acknowledgments
+Original work by Cal Courtney ([@calthejuggler](https://github.com/calthejuggler))
+— [calthejuggler/clux](https://github.com/calthejuggler/clux). MIT licensed; this
+fork keeps that licence.
 
 - [Claude Code](https://claude.ai/code)
 - [tmux](https://github.com/tmux/tmux)
 
-[contributors-shield]: https://img.shields.io/github/contributors/calthejuggler/clux.svg?style=for-the-badge
-[contributors-url]: https://github.com/calthejuggler/clux/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/calthejuggler/clux.svg?style=for-the-badge
-[forks-url]: https://github.com/calthejuggler/clux/network/members
-[stars-shield]: https://img.shields.io/github/stars/calthejuggler/clux.svg?style=for-the-badge
-[stars-url]: https://github.com/calthejuggler/clux/stargazers
-[issues-shield]: https://img.shields.io/github/issues/calthejuggler/clux.svg?style=for-the-badge
-[issues-url]: https://github.com/calthejuggler/clux/issues
-[license-shield]: https://img.shields.io/github/license/calthejuggler/clux.svg?style=for-the-badge
-[license-url]: https://github.com/calthejuggler/clux/blob/main/LICENSE
-[crates-shield]: https://img.shields.io/crates/v/clux.svg?style=for-the-badge
-[crates-url]: https://crates.io/crates/clux
+[license-shield]: https://img.shields.io/github/license/azabost/clux.svg?style=for-the-badge
+[license-url]: https://github.com/azabost/clux/blob/main/LICENSE
