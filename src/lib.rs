@@ -444,35 +444,109 @@ pub fn run_pick(sort: Option<&str>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Column widths for the picker, fitted to the popup.
+///
+/// The bounded columns are sized to their longest value so a session name, a
+/// working directory and a tmux session are shown whole -- truncating them is
+/// what makes rows sharing a prefix indistinguishable, and fzf only matches
+/// what it displays, so a truncated tail cannot be searched for either. The
+/// summary, which has no natural bound, takes whatever is left.
+struct Columns {
+    claude_session: usize,
+    summary: usize,
+    cwd: usize,
+}
+
+const COL_STATE: usize = 7;
+const COL_GAP: usize = 2;
+const MIN_SUMMARY: usize = 20;
+const MAX_CLAUDE_SESSION: usize = 40;
+const MAX_CWD: usize = 70;
+
+fn longest<'entry>(
+    entries: &'entry [ListEntry],
+    field: impl Fn(&'entry ListEntry) -> &'entry str,
+) -> usize {
+    entries
+        .iter()
+        .map(|entry| field(entry).chars().count())
+        .max()
+        .unwrap_or(0)
+}
+
+fn fit_columns(entries: &[ListEntry], popup_width: usize) -> Columns {
+    let claude_session = longest(entries, |entry| &entry.claude_session).min(MAX_CLAUDE_SESSION);
+    let cwd = longest(entries, |entry| &entry.cwd).min(MAX_CWD);
+    let session_name = longest(entries, |entry| &entry.session_name);
+
+    let fixed = COL_STATE + claude_session + cwd + session_name + COL_GAP * 4;
+    let summary = popup_width.saturating_sub(fixed).max(MIN_SUMMARY);
+
+    Columns {
+        claude_session,
+        summary,
+        cwd,
+    }
+}
+
+fn popup_width() -> usize {
+    const FALLBACK: usize = 120;
+    const BORDER: usize = 4;
+    const PERCENT: usize = 80;
+
+    tmux::client_width()
+        .ok()
+        .flatten()
+        .map_or(FALLBACK, |width| {
+            (width * PERCENT / 100).saturating_sub(BORDER)
+        })
+}
+
 fn pick_with_fzf(entries: &[ListEntry]) -> anyhow::Result<()> {
     use std::io::Write as _;
 
+    let width = popup_width();
+    let cols = fit_columns(entries, width);
+
     let header = format!(
-        "{:<7}  {:<25}  {:<40}  {:<25}  {}",
-        "STATE", "CLAUDE SESSION", "SUMMARY", "CWD", "SESSION"
+        "{:<state$}  {:<name$}  {:<summary$}  {:<cwd$}  {}",
+        "STATE",
+        "CLAUDE SESSION",
+        "SUMMARY",
+        "CWD",
+        "SESSION",
+        state = COL_STATE,
+        name = cols.claude_session,
+        summary = cols.summary,
+        cwd = cols.cwd,
     );
 
     let rows: Vec<String> = entries
         .iter()
         .map(|entry| {
             format!(
-                "{}\t{:<7}  {:<25}  {:<40}  {:<25}  {}",
+                "{}\t{:<state$}  {:<name$}  {:<summary$}  {:<cwd$}  {}",
                 entry.target,
                 entry.state,
-                truncate_at(&entry.claude_session, 25),
-                truncate_at(&entry.summary, 40),
-                truncate_at(&entry.cwd, 25),
-                entry.session_name
+                truncate_at(&entry.claude_session, cols.claude_session),
+                truncate_at(&entry.summary, cols.summary),
+                truncate_at(&entry.cwd, cols.cwd),
+                entry.session_name,
+                state = COL_STATE,
+                name = cols.claude_session,
+                summary = cols.summary,
+                cwd = cols.cwd,
             )
         })
         .collect();
 
     let input = rows.join("\n");
+    let popup_size = format!("{width},50%");
 
     let mut child = std::process::Command::new("fzf-tmux")
         .args([
             "-p",
-            "80%,50%",
+            &popup_size,
             "--delimiter",
             "\t",
             "--with-nth",
@@ -837,6 +911,71 @@ mod tests {
                 .and_then(|row| row.panel.displayed.name.as_deref()),
             Some("first")
         );
+    }
+
+    fn entry_with(claude_session: &str, summary: &str, cwd: &str, session: &str) -> ListEntry {
+        ListEntry {
+            target: String::new(),
+            session_id: String::new(),
+            state: "idle",
+            claude_session: claude_session.to_owned(),
+            summary: summary.to_owned(),
+            cwd: cwd.to_owned(),
+            session_name: session.to_owned(),
+            timestamp: 0,
+        }
+    }
+
+    #[test]
+    fn fit_columns_shows_bounded_fields_whole() {
+        let entries = vec![
+            entry_with(
+                "MKL-1008-analyst-WS-A-02",
+                "x",
+                "~/projects/a/very/long/worktree",
+                "work",
+            ),
+            entry_with("short", "y", "~/p", "w"),
+        ];
+
+        let cols = fit_columns(&entries, 248);
+
+        assert_eq!(cols.claude_session, "MKL-1008-analyst-WS-A-02".len());
+        assert_eq!(cols.cwd, "~/projects/a/very/long/worktree".len());
+    }
+
+    #[test]
+    fn fit_columns_gives_the_rest_to_the_summary() {
+        let entries = vec![entry_with("name", "s", "cwd", "sess")];
+
+        let cols = fit_columns(&entries, 200);
+
+        let fixed = COL_STATE + cols.claude_session + cols.cwd + "sess".len() + COL_GAP * 4;
+        assert_eq!(cols.summary, 200 - fixed);
+    }
+
+    #[test]
+    fn fit_columns_keeps_a_usable_summary_on_a_narrow_popup() {
+        let entries = vec![entry_with(
+            "a-rather-long-session-name",
+            "s",
+            "~/some/deep/path/that/goes/on",
+            "sess",
+        )];
+
+        let cols = fit_columns(&entries, 40);
+
+        assert_eq!(cols.summary, MIN_SUMMARY);
+    }
+
+    #[test]
+    fn fit_columns_caps_a_pathological_field() {
+        let entries = vec![entry_with(&"n".repeat(200), "s", &"c".repeat(200), "sess")];
+
+        let cols = fit_columns(&entries, 248);
+
+        assert_eq!(cols.claude_session, MAX_CLAUDE_SESSION);
+        assert_eq!(cols.cwd, MAX_CWD);
     }
 
     fn make_entry(state: &'static str, timestamp: u64) -> ListEntry {

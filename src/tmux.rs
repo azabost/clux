@@ -132,6 +132,13 @@ pub fn current_pane_target() -> anyhow::Result<Option<String>> {
     }
 }
 
+pub fn client_width() -> anyhow::Result<Option<usize>> {
+    let Some(out) = run_tmux(&["display-message", "-p", "#{client_width}"])? else {
+        return Ok(None);
+    };
+    Ok(String::from_utf8_lossy(&out.stdout).trim().parse().ok())
+}
+
 pub fn switch_client(target: &str) -> anyhow::Result<()> {
     let _ = Command::new("tmux")
         .args(["switch-client", "-t", target])
