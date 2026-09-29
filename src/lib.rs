@@ -462,6 +462,8 @@ struct Columns {
 const COL_STATE: usize = 7;
 const COL_GAP: usize = 2;
 const MIN_SUMMARY: usize = 20;
+const MIN_NAME: usize = 12;
+const MIN_CWD: usize = 12;
 const MAX_NAME: usize = 40;
 const MAX_CWD: usize = 70;
 
@@ -477,10 +479,28 @@ fn longest<'entry>(
 }
 
 fn fit_columns(entries: &[ListEntry], popup_width: usize) -> Columns {
-    let name = longest(entries, |entry| &entry.claude_session)
+    let mut name = longest(entries, |entry| &entry.claude_session)
         .max(longest(entries, |entry| &entry.session_name))
         .min(MAX_NAME);
-    let cwd = longest(entries, |entry| &entry.cwd).min(MAX_CWD);
+    let mut cwd = longest(entries, |entry| &entry.cwd).min(MAX_CWD);
+
+    // What the row needs beyond the popup once the summary is down to its
+    // floor. Widening alone would push the last column off a narrow screen, so
+    // claw the excess back: from the working directory first, since its rows
+    // share a long prefix, then from the names, which carry two columns each.
+    let overflow = |names: usize, dir: usize| {
+        (COL_STATE + names + dir + names + COL_GAP * 4 + MIN_SUMMARY).saturating_sub(popup_width)
+    };
+
+    let over_cwd = overflow(name, cwd);
+    if over_cwd > 0 {
+        cwd -= over_cwd.min(cwd.saturating_sub(MIN_CWD));
+    }
+
+    let over_names = overflow(name, cwd);
+    if over_names > 0 {
+        name -= over_names.div_ceil(2).min(name.saturating_sub(MIN_NAME));
+    }
 
     let fixed = COL_STATE + name + cwd + name + COL_GAP * 4;
     let summary = popup_width.saturating_sub(fixed).max(MIN_SUMMARY);
@@ -978,6 +998,57 @@ mod tests {
 
         let cols = fit_columns(&entries, 40);
 
+        assert_eq!(cols.summary, MIN_SUMMARY);
+    }
+
+    #[test]
+    fn fit_columns_takes_the_overflow_from_the_working_directory_first() {
+        let entries = vec![entry_with(
+            "MKL-1008-analyst-WS-A-02",
+            "s",
+            "~/projects/mudita/Launcher-2/.claude/worktrees/task+MKL-1008",
+            "MKL-1008-analyst",
+        )];
+
+        let wide = fit_columns(&entries, 248);
+        let narrow = fit_columns(&entries, 120);
+
+        assert_eq!(narrow.name, wide.name);
+        assert!(narrow.cwd < wide.cwd);
+    }
+
+    #[test]
+    fn fit_columns_fits_the_row_into_a_laptop_popup() {
+        let entries = vec![entry_with(
+            "MKL-1008-analyst-WS-A-02",
+            "s",
+            "~/projects/mudita/Launcher-2/.claude/worktrees/task+MKL-1008",
+            "MKL-1008-analyst",
+        )];
+
+        for popup in [248_usize, 160, 120, 100, 80] {
+            let cols = fit_columns(&entries, popup);
+            let total = COL_STATE + cols.name + cols.cwd + cols.name + COL_GAP * 4 + cols.summary;
+            assert!(
+                total <= popup || cols.cwd == MIN_CWD && cols.name == MIN_NAME,
+                "popup {popup} overflowed to {total}"
+            );
+        }
+    }
+
+    #[test]
+    fn fit_columns_never_shrinks_below_the_minimums() {
+        let entries = vec![entry_with(
+            &"n".repeat(60),
+            "s",
+            &"c".repeat(90),
+            &"t".repeat(60),
+        )];
+
+        let cols = fit_columns(&entries, 30);
+
+        assert_eq!(cols.name, MIN_NAME);
+        assert_eq!(cols.cwd, MIN_CWD);
         assert_eq!(cols.summary, MIN_SUMMARY);
     }
 
