@@ -452,7 +452,9 @@ pub fn run_pick(sort: Option<&str>) -> anyhow::Result<()> {
 /// what it displays, so a truncated tail cannot be searched for either. The
 /// summary, which has no natural bound, takes whatever is left.
 struct Columns {
-    claude_session: usize,
+    /// Shared by the Claude session and the tmux session, so the two name
+    /// columns line up and neither is cut to fit the other.
+    name: usize,
     summary: usize,
     cwd: usize,
 }
@@ -460,7 +462,7 @@ struct Columns {
 const COL_STATE: usize = 7;
 const COL_GAP: usize = 2;
 const MIN_SUMMARY: usize = 20;
-const MAX_CLAUDE_SESSION: usize = 40;
+const MAX_NAME: usize = 40;
 const MAX_CWD: usize = 70;
 
 fn longest<'entry>(
@@ -475,18 +477,15 @@ fn longest<'entry>(
 }
 
 fn fit_columns(entries: &[ListEntry], popup_width: usize) -> Columns {
-    let claude_session = longest(entries, |entry| &entry.claude_session).min(MAX_CLAUDE_SESSION);
+    let name = longest(entries, |entry| &entry.claude_session)
+        .max(longest(entries, |entry| &entry.session_name))
+        .min(MAX_NAME);
     let cwd = longest(entries, |entry| &entry.cwd).min(MAX_CWD);
-    let session_name = longest(entries, |entry| &entry.session_name);
 
-    let fixed = COL_STATE + claude_session + cwd + session_name + COL_GAP * 4;
+    let fixed = COL_STATE + name + cwd + name + COL_GAP * 4;
     let summary = popup_width.saturating_sub(fixed).max(MIN_SUMMARY);
 
-    Columns {
-        claude_session,
-        summary,
-        cwd,
-    }
+    Columns { name, summary, cwd }
 }
 
 fn popup_width() -> usize {
@@ -509,14 +508,14 @@ fn pick_with_fzf(entries: &[ListEntry]) -> anyhow::Result<()> {
     let cols = fit_columns(entries, width);
 
     let header = format!(
-        "{:<state$}  {:<name$}  {:<summary$}  {:<cwd$}  {}",
+        "{:<state$}  {:<name$}  {:<summary$}  {:<cwd$}  {:<name$}",
         "STATE",
         "CLAUDE SESSION",
         "SUMMARY",
         "CWD",
         "SESSION",
         state = COL_STATE,
-        name = cols.claude_session,
+        name = cols.name,
         summary = cols.summary,
         cwd = cols.cwd,
     );
@@ -525,15 +524,15 @@ fn pick_with_fzf(entries: &[ListEntry]) -> anyhow::Result<()> {
         .iter()
         .map(|entry| {
             format!(
-                "{}\t{:<state$}  {:<name$}  {:<summary$}  {:<cwd$}  {}",
+                "{}\t{:<state$}  {:<name$}  {:<summary$}  {:<cwd$}  {:<name$}",
                 entry.target,
                 entry.state,
-                truncate_at(&entry.claude_session, cols.claude_session),
+                truncate_at(&entry.claude_session, cols.name),
                 truncate_at(&entry.summary, cols.summary),
                 truncate_at(&entry.cwd, cols.cwd),
-                entry.session_name,
+                truncate_at(&entry.session_name, cols.name),
                 state = COL_STATE,
-                name = cols.claude_session,
+                name = cols.name,
                 summary = cols.summary,
                 cwd = cols.cwd,
             )
@@ -940,8 +939,22 @@ mod tests {
 
         let cols = fit_columns(&entries, 248);
 
-        assert_eq!(cols.claude_session, "MKL-1008-analyst-WS-A-02".len());
+        assert_eq!(cols.name, "MKL-1008-analyst-WS-A-02".len());
         assert_eq!(cols.cwd, "~/projects/a/very/long/worktree".len());
+    }
+
+    #[test]
+    fn fit_columns_sizes_both_name_columns_to_the_longer_of_the_two() {
+        let entries = vec![entry_with(
+            "short-claude",
+            "s",
+            "~/p",
+            "a-much-longer-tmux-session",
+        )];
+
+        let cols = fit_columns(&entries, 248);
+
+        assert_eq!(cols.name, "a-much-longer-tmux-session".len());
     }
 
     #[test]
@@ -950,7 +963,7 @@ mod tests {
 
         let cols = fit_columns(&entries, 200);
 
-        let fixed = COL_STATE + cols.claude_session + cols.cwd + "sess".len() + COL_GAP * 4;
+        let fixed = COL_STATE + cols.name + cols.cwd + cols.name + COL_GAP * 4;
         assert_eq!(cols.summary, 200 - fixed);
     }
 
@@ -974,7 +987,7 @@ mod tests {
 
         let cols = fit_columns(&entries, 248);
 
-        assert_eq!(cols.claude_session, MAX_CLAUDE_SESSION);
+        assert_eq!(cols.name, MAX_NAME);
         assert_eq!(cols.cwd, MAX_CWD);
     }
 
