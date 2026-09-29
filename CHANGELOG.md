@@ -11,8 +11,21 @@ hand.
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/azabost/clux/compare/v0.4.0...v0.5.0) - 2026-09-30
+
+### Added
+
+- fit the picker's columns to the popup instead of hardcoding their widths, so
+  a wide terminal shows session names and working directories whole rather than
+  leaving half the popup empty; the summary takes whatever is left
+- give the Claude session and the tmux session the same column width, sized to
+  the longer of the two
+
 ### Fixed
 
+- reclaim column width when the row outgrows the popup, from the working
+  directory first and then from the names, so a narrow terminal no longer
+  pushes the last column off screen
 - publish the release once per tag rather than once per build target, which
   raced and produced two release records for v0.4.0
 
