@@ -21,6 +21,7 @@ For each session it tells you:
 - **State** -- active (Claude is working) or idle (Claude finished and is waiting for you)
 - **Claude session** -- the name Claude Code gave the conversation
 - **Summary** -- what Claude is working on, from its recap or your last prompt
+- **Working directory** and the **tmux session** the pane belongs to
 
 When you hit `prefix + s` to switch sessions you can see which ones have Claude
 running without checking each one by hand. There is also a dedicated Claude
@@ -114,9 +115,16 @@ plugin.
 ### The Claude picker
 
 The Claude picker (`prefix + a`) gives you a focused view of just your Claude
-sessions: state, the Claude session name, a summary of what Claude is doing, and
-the working directory. Sessions are sorted by most recently switched-to by
-default, with the current session pinned to the bottom (like harpoon).
+sessions: state, the Claude session name, a summary of what Claude is doing, the
+working directory and the tmux session. Sessions are sorted by most recently
+switched-to by default, with the current session pinned to the bottom (like
+harpoon).
+
+Columns are measured against the popup rather than fixed, so a wide terminal
+shows session names and working directories whole and spends what is left on
+the summary. That is worth more than tidiness: fzf matches only what it
+displays, so a name cut to fit cannot be searched for. A narrow terminal gives
+width back, from the working directory first and then from the names.
 
 If Claude Code has produced a recap and no conversation message has been written
 after it, clux uses that recap as the summary. Set `@clux-recaps` to `off` to
