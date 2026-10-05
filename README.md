@@ -25,8 +25,8 @@ For each session it tells you:
 
 When you hit `prefix + s` to switch sessions you can see which ones have Claude
 running without checking each one by hand. There is also a dedicated Claude
-picker (`prefix + a`) showing only sessions with Claude, sorted by most recent
-activity.
+picker (`prefix + a`) showing only sessions with Claude, sorted by the one you
+switched to most recently.
 
 The Claude picker looks roughly like this:
 
@@ -90,9 +90,11 @@ Commands:
   pick    Open a Claude-only session picker (fzf or tmux menu)
 ```
 
-`clux list` is the most useful one outside tmux. It prints a tab-separated table
-of every Claude Code session it can find, with its state, Claude session name,
-summary, working directory and tmux session name.
+`clux list` is the most useful one outside tmux. It prints every Claude Code
+session it can find as six tab-separated fields: the tmux pane target, the
+state, the Claude session name, the summary, the working directory and the tmux
+session name. The pane target comes first because that is what you hand to
+`tmux switch-client -t` to jump to the session.
 
 `clux update`, `clux select` and `clux pick` all require tmux to be running.
 
@@ -114,7 +116,7 @@ plugin.
 |--------|---------|-------------|
 | `@clux-key` | `s` | Key to bind the session picker (after prefix) |
 | `@clux-claude-key` | `a` | Key to bind the Claude-only picker (after prefix) |
-| `@clux-format` | ` \| {total} ({detail})` | Format string for session status |
+| `@clux-format` | ` \| 🤖 {total} ({detail})` | Format string for session status |
 | `@clux-filter-binds` | _(none)_ | Comma-separated `key:filter` pairs for filtered pickers |
 | `@clux-fzf` | _(on)_ | Set to `off` to use tmux menus instead of fzf in the Claude picker |
 | `@clux-recaps` | _(on)_ | Set to `off` to use history summaries instead of Claude Code recaps |
@@ -181,13 +183,15 @@ clux pick --sort status-rev
 set -g @clux-key 's'
 set -g @clux-claude-key 'a'
 set -g @clux-format ' | {active}/{total}'
-set -g @clux-filter-binds 'S:has-claude,A:active,I:idle'
+set -g @clux-filter-binds 'S:has-claude,A:active,Z:idle'
 set -g @clux-sort 'status'
 ```
 
 This binds `prefix + s` to the full session picker, `prefix + a` to the Claude
 picker, `prefix + S` to show only sessions with Claude, `prefix + A` for active
-sessions and `prefix + I` for idle ones, and sorts idle sessions first.
+sessions and `prefix + Z` for idle ones, and sorts idle sessions first. Pick
+keys tmux and tpm leave free -- `I` and `U` belong to tpm's install and update,
+and `C`, `D`, `E`, `L` and `M` are bound by tmux itself.
 
 ## Credits
 
