@@ -28,9 +28,17 @@ running without checking each one by hand. There is also a dedicated Claude
 picker (`prefix + a`) showing only sessions with Claude, sorted by most recent
 activity.
 
-![Session picker with Claude status](assets/session-picker.png)
+The Claude picker looks roughly like this:
 
-![Claude picker with fzf](assets/claude-picker.png)
+```
+STATE    CLAUDE SESSION        SUMMARY                                     CWD                        SESSION
+active   auth-refresh-token    Reworking the refresh flow so an expired…   ~/code/api                 api
+idle     flaky-e2e-suite       Narrowed the flake down to a shared fixtu…  ~/code/web                 web
+idle     release-notes-0-9     Drafted the 0.9 notes, waiting on your re…  ~/code/web/.worktrees/rel  web
+```
+
+Column widths are measured against the popup, so a wider terminal shows more of
+each field rather than more empty space.
 
 ## Getting started
 
