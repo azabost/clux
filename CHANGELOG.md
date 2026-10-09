@@ -11,6 +11,16 @@ hand.
 
 ## [Unreleased]
 
+## [0.5.1](https://github.com/azabost/clux/compare/v0.5.0...v0.5.1) - 2026-10-09
+
+### Fixed
+
+- keep each picker header over its column; a Claude session name shorter than
+  its header pushed every header to its right out of line with the rows
+- lay the picker's row out across the part of the popup fzf actually shows
+  rather than the whole popup, which cut off the last column whenever a name
+  filled its own
+
 ## [0.5.0](https://github.com/azabost/clux/compare/v0.4.0...v0.5.0) - 2026-09-30
 
 ### Added
