@@ -42,7 +42,7 @@ each field rather than more empty space.
 
 ## Getting started
 
-You need [tmux](https://github.com/tmux/tmux) and [Claude Code](https://claude.ai/code).
+You need [tmux](https://github.com/tmux/tmux) 3.3 or later and [Claude Code](https://claude.ai/code).
 
 ### Install as a tmux plugin (recommended)
 
@@ -142,7 +142,9 @@ always use the older history-based summary.
 
 If you have `fzf-tmux` installed it is used for fuzzy finding. Otherwise clux
 falls back to a tmux display-menu, which you can force with
-`set -g @clux-fzf 'off'`.
+`set -g @clux-fzf 'off'`. The picker keeps the colours and key bindings from
+your `FZF_DEFAULT_OPTS`, but sets fzf's borders, margin, padding, pointer and
+marker itself, since its columns are measured against them.
 
 ### Sort order
 

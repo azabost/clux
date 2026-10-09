@@ -468,14 +468,31 @@ const MAX_NAME: usize = 40;
 const MAX_CWD: usize = 70;
 const HEADER_NAME: &str = "CLAUDE SESSION";
 const HEADER_CWD: &str = "CWD";
-/// Columns of the popup fzf does not give to the line. On tmux newer than 3.2
+/// Columns of the popup fzf does not give to the line. On tmux 3.3 and later
 /// fzf-tmux opens the popup without a tmux border and has fzf draw its own,
 /// which takes one column on each side plus one of padding inside each, with
 /// fzf's scrollbar on the border itself; fzf's pointer and marker take two
-/// more on the left. A line that does not fit is cut with an ellipsis. A
-/// border, margin or padding in `FZF_DEFAULT_OPTS` still throws this off,
-/// since fzf-tmux puts the user's options after its own.
+/// more on the left. A line that does not fit is cut with an ellipsis.
 const POPUP_CHROME: usize = 6;
+/// The layout `POPUP_CHROME` is measured against, passed on fzf's command
+/// line, where it wins over `FZF_DEFAULT_OPTS`.
+const FZF_LAYOUT: &[&str] = &[
+    "--border=rounded",
+    "--margin=0",
+    "--padding=0",
+    "--pointer=▌",
+    "--marker=┃",
+];
+/// The same for the section borders fzf 0.58 added, which `--style=full` turns
+/// on. A border around the input also moves the scrollbar off fzf's border
+/// and into the line. An older fzf rejects these as unknown options and exits
+/// without showing the picker.
+const FZF_SECTION_LAYOUT: &[&str] = &[
+    "--list-border=none",
+    "--input-border=none",
+    "--header-border=none",
+];
+const FZF_SECTION_BORDERS_SINCE: (u32, u32) = (0, 58);
 
 fn longest<'entry>(
     entries: &'entry [ListEntry],
@@ -536,6 +553,32 @@ fn popup_width() -> usize {
         })
 }
 
+/// The major and minor version from `fzf --version`, e.g. `0.74.4 (Homebrew)`.
+fn parse_fzf_version(output: &str) -> Option<(u32, u32)> {
+    let mut parts = output.split_whitespace().next()?.split('.');
+    Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
+}
+
+fn fzf_version() -> Option<(u32, u32)> {
+    // fzf reads its default options even for --version, and one it rejects
+    // would hide the version.
+    let out = std::process::Command::new("fzf")
+        .arg("--version")
+        .env_remove("FZF_DEFAULT_OPTS")
+        .env_remove("FZF_DEFAULT_OPTS_FILE")
+        .output()
+        .ok()?;
+    parse_fzf_version(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn fzf_section_layout() -> &'static [&'static str] {
+    if fzf_version().is_some_and(|version| version >= FZF_SECTION_BORDERS_SINCE) {
+        FZF_SECTION_LAYOUT
+    } else {
+        &[]
+    }
+}
+
 fn pick_with_fzf(entries: &[ListEntry]) -> anyhow::Result<()> {
     use std::io::Write as _;
 
@@ -590,6 +633,8 @@ fn pick_with_fzf(entries: &[ListEntry]) -> anyhow::Result<()> {
             "--no-preview",
             "--reverse",
         ])
+        .args(FZF_LAYOUT)
+        .args(fzf_section_layout())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::inherit())
@@ -1075,6 +1120,20 @@ mod tests {
 
         assert_eq!(cols.name, HEADER_NAME.len());
         assert_eq!(cols.cwd, HEADER_CWD.len());
+    }
+
+    #[test]
+    fn parse_fzf_version_reads_major_and_minor() {
+        assert_eq!(parse_fzf_version("0.74.4 (Homebrew)\n"), Some((0, 74)));
+        assert_eq!(parse_fzf_version("0.44.1 (debian)"), Some((0, 44)));
+        assert_eq!(parse_fzf_version("0.58.0"), Some((0, 58)));
+    }
+
+    #[test]
+    fn parse_fzf_version_rejects_what_it_cannot_read() {
+        assert_eq!(parse_fzf_version(""), None);
+        assert_eq!(parse_fzf_version("fzf"), None);
+        assert_eq!(parse_fzf_version("1"), None);
     }
 
     #[test]
