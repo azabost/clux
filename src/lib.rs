@@ -466,6 +466,8 @@ const MIN_NAME: usize = 12;
 const MIN_CWD: usize = 12;
 const MAX_NAME: usize = 40;
 const MAX_CWD: usize = 70;
+const HEADER_NAME: &str = "CLAUDE SESSION";
+const HEADER_CWD: &str = "CWD";
 
 fn longest<'entry>(
     entries: &'entry [ListEntry],
@@ -479,10 +481,15 @@ fn longest<'entry>(
 }
 
 fn fit_columns(entries: &[ListEntry], popup_width: usize) -> Columns {
+    // A column narrower than its header pushes every header to its right out
+    // of line with the rows below it.
     let mut name = longest(entries, |entry| &entry.claude_session)
         .max(longest(entries, |entry| &entry.session_name))
+        .max(HEADER_NAME.len())
         .min(MAX_NAME);
-    let mut cwd = longest(entries, |entry| &entry.cwd).min(MAX_CWD);
+    let mut cwd = longest(entries, |entry| &entry.cwd)
+        .max(HEADER_CWD.len())
+        .min(MAX_CWD);
 
     // What the row needs beyond the popup once the summary is down to its
     // floor. Widening alone would push the last column off a narrow screen, so
@@ -530,9 +537,9 @@ fn pick_with_fzf(entries: &[ListEntry]) -> anyhow::Result<()> {
     let header = format!(
         "{:<state$}  {:<name$}  {:<summary$}  {:<cwd$}  {:<name$}",
         "STATE",
-        "CLAUDE SESSION",
+        truncate_at(HEADER_NAME, cols.name),
         "SUMMARY",
-        "CWD",
+        HEADER_CWD,
         "SESSION",
         state = COL_STATE,
         name = cols.name,
@@ -1050,6 +1057,16 @@ mod tests {
         assert_eq!(cols.name, MIN_NAME);
         assert_eq!(cols.cwd, MIN_CWD);
         assert_eq!(cols.summary, MIN_SUMMARY);
+    }
+
+    #[test]
+    fn fit_columns_keeps_the_headers_over_their_columns() {
+        let entries = vec![entry_with("tmux-e9", "s", "~", "config")];
+
+        let cols = fit_columns(&entries, 248);
+
+        assert_eq!(cols.name, HEADER_NAME.len());
+        assert_eq!(cols.cwd, HEADER_CWD.len());
     }
 
     #[test]
