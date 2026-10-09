@@ -468,6 +468,14 @@ const MAX_NAME: usize = 40;
 const MAX_CWD: usize = 70;
 const HEADER_NAME: &str = "CLAUDE SESSION";
 const HEADER_CWD: &str = "CWD";
+/// Columns of the popup fzf does not give to the line. On tmux newer than 3.2
+/// fzf-tmux opens the popup without a tmux border and has fzf draw its own,
+/// which takes one column on each side plus one of padding inside each, with
+/// fzf's scrollbar on the border itself; fzf's pointer and marker take two
+/// more on the left. A line that does not fit is cut with an ellipsis. A
+/// border, margin or padding in `FZF_DEFAULT_OPTS` still throws this off,
+/// since fzf-tmux puts the user's options after its own.
+const POPUP_CHROME: usize = 6;
 
 fn longest<'entry>(
     entries: &'entry [ListEntry],
@@ -480,7 +488,7 @@ fn longest<'entry>(
         .unwrap_or(0)
 }
 
-fn fit_columns(entries: &[ListEntry], popup_width: usize) -> Columns {
+fn fit_columns(entries: &[ListEntry], line_width: usize) -> Columns {
     // A column narrower than its header pushes every header to its right out
     // of line with the rows below it.
     let mut name = longest(entries, |entry| &entry.claude_session)
@@ -491,12 +499,12 @@ fn fit_columns(entries: &[ListEntry], popup_width: usize) -> Columns {
         .max(HEADER_CWD.len())
         .min(MAX_CWD);
 
-    // What the row needs beyond the popup once the summary is down to its
+    // What the row needs beyond the line once the summary is down to its
     // floor. Widening alone would push the last column off a narrow screen, so
     // claw the excess back: from the working directory first, since its rows
     // share a long prefix, then from the names, which carry two columns each.
     let overflow = |names: usize, dir: usize| {
-        (COL_STATE + names + dir + names + COL_GAP * 4 + MIN_SUMMARY).saturating_sub(popup_width)
+        (COL_STATE + names + dir + names + COL_GAP * 4 + MIN_SUMMARY).saturating_sub(line_width)
     };
 
     let over_cwd = overflow(name, cwd);
@@ -510,7 +518,7 @@ fn fit_columns(entries: &[ListEntry], popup_width: usize) -> Columns {
     }
 
     let fixed = COL_STATE + name + cwd + name + COL_GAP * 4;
-    let summary = popup_width.saturating_sub(fixed).max(MIN_SUMMARY);
+    let summary = line_width.saturating_sub(fixed).max(MIN_SUMMARY);
 
     Columns { name, summary, cwd }
 }
@@ -532,7 +540,7 @@ fn pick_with_fzf(entries: &[ListEntry]) -> anyhow::Result<()> {
     use std::io::Write as _;
 
     let width = popup_width();
-    let cols = fit_columns(entries, width);
+    let cols = fit_columns(entries, width.saturating_sub(POPUP_CHROME));
 
     let header = format!(
         "{:<state$}  {:<name$}  {:<summary$}  {:<cwd$}  {:<name$}",
@@ -1063,7 +1071,7 @@ mod tests {
     fn fit_columns_keeps_the_headers_over_their_columns() {
         let entries = vec![entry_with("tmux-e9", "s", "~", "config")];
 
-        let cols = fit_columns(&entries, 248);
+        let cols = fit_columns(&entries, 242);
 
         assert_eq!(cols.name, HEADER_NAME.len());
         assert_eq!(cols.cwd, HEADER_CWD.len());
