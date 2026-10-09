@@ -11,6 +11,19 @@ hand.
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/azabost/clux/compare/v0.5.1...v0.6.0) - 2026-10-09
+
+### Changed
+
+- require tmux 3.3 or later; on tmux 3.2 the Claude picker now shows two
+  frames and cuts its last two columns
+
+### Fixed
+
+- keep a border, margin, padding, section border or wider pointer in
+  `FZF_DEFAULT_OPTS` from cutting off the picker's last column; the picker now
+  sets fzf's layout itself and keeps the rest of your fzf options
+
 ## [0.5.1](https://github.com/azabost/clux/compare/v0.5.0...v0.5.1) - 2026-10-09
 
 ### Fixed
