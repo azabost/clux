@@ -11,6 +11,14 @@ hand.
 
 ## [Unreleased]
 
+## [0.6.1](https://github.com/azabost/clux/compare/v0.6.0...v0.6.1) - 2026-11-03
+
+### Fixed
+
+- show a Claude session started as the pane's own command, e.g.
+  `tmux new-session 'claude ...'`; it was missing from the list and the picker
+  unless the pane title matched the session name
+
 ## [0.6.0](https://github.com/azabost/clux/compare/v0.5.1...v0.6.0) - 2026-10-09
 
 ### Changed
