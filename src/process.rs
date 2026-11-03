@@ -32,6 +32,9 @@ pub fn find_tmux_pane<'pane>(
     pane_map: &'pane HashMap<u32, PaneInfo>,
     _tree: &ProcessTree,
 ) -> Option<&'pane PaneInfo> {
+    if let Some(value) = pane_map.get(&pid) {
+        return Some(value);
+    }
     let mut current = pid;
     for _ in 0..20 {
         let ppid = get_ppid(current)?;
@@ -95,6 +98,9 @@ pub fn find_tmux_pane<'pane>(
     pane_map: &'pane HashMap<u32, PaneInfo>,
     tree: &ProcessTree,
 ) -> Option<&'pane PaneInfo> {
+    if let Some(value) = pane_map.get(&pid) {
+        return Some(value);
+    }
     let mut current = pid;
     for _ in 0..20 {
         let ppid = tree.parents.get(&current)?;
@@ -138,6 +144,27 @@ mod tests {
         let parents = parse_ps_output(output);
         assert_eq!(parents.len(), 1);
         assert_eq!(parents.get(&200), Some(&1));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn find_tmux_pane_process_is_the_pane_itself() {
+        // `tmux new-session 'claude ...'` runs claude as the pane process, so
+        // its own pid is the pane pid and no ancestor matches.
+        let mut pane_map = HashMap::new();
+        let current_pid = std::process::id();
+        let _ = pane_map.insert(
+            current_pid,
+            PaneInfo {
+                session_name: "direct".to_owned(),
+                target: "direct:1.1".to_owned(),
+                title: String::new(),
+            },
+        );
+        let tree = ProcessTree::build();
+
+        let result = find_tmux_pane(current_pid, &pane_map, &tree);
+        assert_eq!(result.expect("pane").target, "direct:1.1");
     }
 
     #[cfg(target_os = "linux")]
