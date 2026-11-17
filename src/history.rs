@@ -161,8 +161,7 @@ pub fn truncate_display(text: &str, max_chars: usize) -> String {
 }
 
 fn history_path() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    let path = PathBuf::from(home).join(".claude").join("history.jsonl");
+    let path = crate::claude::config_dir()?.join("history.jsonl");
     path.exists().then_some(path)
 }
 

@@ -11,6 +11,11 @@ hand.
 
 ## [Unreleased]
 
+### Fixed
+
+- respect `CLAUDE_CONFIG_DIR`; with it set, clux found no sessions, recaps or
+  prompt history because it always looked in `~/.claude`
+
 ## [0.6.1](https://github.com/azabost/clux/compare/v0.6.0...v0.6.1) - 2026-11-03
 
 ### Fixed

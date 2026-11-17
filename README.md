@@ -12,9 +12,10 @@ Written in Rust.
 
 ## What it does
 
-clux looks at `~/.claude/sessions/`, works out which Claude Code sessions are
-running, and maps each one to the tmux pane it lives in. It then shows their
-status right in your tmux session picker.
+clux looks at `~/.claude/sessions/` (or `$CLAUDE_CONFIG_DIR/sessions/` when
+that variable is set), works out which Claude Code sessions are running, and
+maps each one to the tmux pane it lives in. It then shows their status right in
+your tmux session picker.
 
 For each session it tells you:
 
@@ -194,6 +195,22 @@ picker, `prefix + S` to show only sessions with Claude, `prefix + A` for active
 sessions and `prefix + Z` for idle ones, and sorts idle sessions first. Pick
 keys tmux and tpm leave free -- `I` and `U` belong to tpm's install and update,
 and `C`, `D`, `E`, `L` and `M` are bound by tmux itself.
+
+### Custom Claude Code config directory
+
+If you run Claude Code with `CLAUDE_CONFIG_DIR`, clux reads sessions,
+transcripts and prompt history from that directory instead of `~/.claude`.
+
+The plugin runs clux from the tmux server, so the variable has to be in the
+server's environment, not just in the shell of a pane. Export it in your shell
+profile before tmux starts, or set it in `.tmux.conf`:
+
+```sh
+set-environment -g CLAUDE_CONFIG_DIR "$HOME/.config/claude"
+```
+
+clux reads one config directory at a time: sessions started with a different
+`CLAUDE_CONFIG_DIR` than the one clux sees don't show up.
 
 ## Credits
 

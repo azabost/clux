@@ -1,6 +1,7 @@
 use crate::process::ProcessTree;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::io::{Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -43,7 +44,7 @@ pub struct SessionInfo {
 }
 
 pub fn discover_sessions(tree: &ProcessTree) -> Vec<ClaudeSession> {
-    let sessions_dir = match home_dir().map(|home| home.join(".claude").join("sessions")) {
+    let sessions_dir = match config_dir().map(|config| config.join("sessions")) {
         Some(dir) if dir.is_dir() => dir,
         _ => return Vec::new(),
     };
@@ -125,17 +126,17 @@ pub fn fold_parked_jobs(sessions: &[ClaudeSession]) -> Vec<PanelSession<'_>> {
 }
 
 pub fn detect_info(session: &ClaudeSession) -> SessionInfo {
-    let Some(home) = home_dir() else {
+    let Some(config) = config_dir() else {
         return SessionInfo {
             state: SessionState::from_status(session.status.as_deref()),
             recap: None,
         };
     };
-    detect_info_in(session, &home)
+    detect_info_in(session, &config)
 }
 
-pub fn detect_info_in(session: &ClaudeSession, home: &Path) -> SessionInfo {
-    let recap = find_jsonl_path_in(session, home)
+pub fn detect_info_in(session: &ClaudeSession, config_dir: &Path) -> SessionInfo {
+    let recap = find_jsonl_path_in(session, config_dir)
         .and_then(|path| read_tail_chunk(&path))
         .and_then(|tail| parse_recap(&tail));
 
@@ -177,8 +178,8 @@ fn strip_recap_hint(content: &str) -> String {
         .to_owned()
 }
 
-pub fn find_jsonl_path_in(session: &ClaudeSession, home: &Path) -> Option<PathBuf> {
-    let projects_dir = home.join(".claude").join("projects");
+pub fn find_jsonl_path_in(session: &ClaudeSession, config_dir: &Path) -> Option<PathBuf> {
+    let projects_dir = config_dir.join("projects");
     let file_name = format!("{}.jsonl", session.session_id);
 
     let by_cwd = projects_dir.join(encode_cwd(&session.cwd)).join(&file_name);
@@ -225,8 +226,21 @@ pub fn read_tail_chunk(path: &Path) -> Option<String> {
     Some(buf)
 }
 
-fn home_dir() -> Option<PathBuf> {
-    std::env::var("HOME").ok().map(PathBuf::from)
+/// Claude Code's config directory: `$CLAUDE_CONFIG_DIR` when set, `~/.claude` otherwise.
+pub fn config_dir() -> Option<PathBuf> {
+    config_dir_from(
+        std::env::var_os("CLAUDE_CONFIG_DIR"),
+        std::env::var_os("HOME"),
+    )
+}
+
+fn config_dir_from(claude_config_dir: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
+    match claude_config_dir {
+        Some(dir) if !dir.is_empty() => Some(PathBuf::from(dir)),
+        _ => home
+            .filter(|dir| !dir.is_empty())
+            .map(|dir| PathBuf::from(dir).join(".claude")),
+    }
 }
 
 #[cfg(test)]
@@ -495,9 +509,9 @@ mod tests {
         }
     }
 
-    fn setup_jsonl(home: &Path, cwd: &str, session_id: &str, content: &str) {
+    fn setup_jsonl(config_dir: &Path, cwd: &str, session_id: &str, content: &str) {
         let encoded = encode_cwd(cwd);
-        let project_dir = home.join(".claude").join("projects").join(&encoded);
+        let project_dir = config_dir.join("projects").join(&encoded);
         std::fs::create_dir_all(&project_dir).expect("mkdir");
         std::fs::write(project_dir.join(format!("{session_id}.jsonl")), content).expect("write");
     }
@@ -580,11 +594,7 @@ mod tests {
     #[test]
     fn find_jsonl_path_exists() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let projects_dir = dir
-            .path()
-            .join(".claude")
-            .join("projects")
-            .join("-home-user");
+        let projects_dir = dir.path().join("projects").join("-home-user");
         std::fs::create_dir_all(&projects_dir).expect("mkdir");
         std::fs::write(projects_dir.join("sess-1.jsonl"), "data").expect("write");
 
@@ -609,7 +619,6 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let project_dir = dir
             .path()
-            .join(".claude")
             .join("projects")
             .join("-home-user-where-the-session-started");
         std::fs::create_dir_all(&project_dir).expect("create project dir");
@@ -647,6 +656,29 @@ mod tests {
         };
         let result = find_jsonl_path_in(&session, dir.path());
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn config_dir_prefers_claude_config_dir() {
+        let dir = config_dir_from(Some("/custom/claude".into()), Some("/home/user".into()));
+        assert_eq!(dir, Some(PathBuf::from("/custom/claude")));
+    }
+
+    #[test]
+    fn config_dir_defaults_to_dot_claude_in_home() {
+        let dir = config_dir_from(None, Some("/home/user".into()));
+        assert_eq!(dir, Some(PathBuf::from("/home/user/.claude")));
+    }
+
+    #[test]
+    fn config_dir_ignores_empty_claude_config_dir() {
+        let dir = config_dir_from(Some("".into()), Some("/home/user".into()));
+        assert_eq!(dir, Some(PathBuf::from("/home/user/.claude")));
+    }
+
+    #[test]
+    fn config_dir_missing_without_home() {
+        assert_eq!(config_dir_from(None, None), None);
     }
 
     #[test]
