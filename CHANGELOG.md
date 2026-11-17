@@ -11,6 +11,8 @@ hand.
 
 ## [Unreleased]
 
+## [0.6.2](https://github.com/azabost/clux/compare/v0.6.1...v0.6.2) - 2026-11-17
+
 ### Fixed
 
 - respect `CLAUDE_CONFIG_DIR`; with it set, clux found no sessions, recaps or
